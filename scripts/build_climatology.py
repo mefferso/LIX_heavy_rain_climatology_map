@@ -5,20 +5,22 @@ The first run processes 1951 through the latest complete calendar year. A compac
 NPZ state is retained so later annual runs only need to process newly completed
 years. Output JSON is intentionally static so the web map can live on GitHub
 Pages with no server.
+
+NOAA's NCSS endpoint has intermittently returned 503s for nClimGrid-Daily. This
+builder therefore reads the same THREDDS datasets through OPeNDAP and selects
+only the LIX bounding box before loading precipitation values.
 """
 
 from __future__ import annotations
 
 import argparse
-import calendar
 import json
 import os
-import shutil
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -35,13 +37,12 @@ STATE_FILE = STATE_DIR / "climatology_state.npz"
 START_YEAR = 1951
 THRESHOLDS_IN = np.array([1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0], dtype=np.float32)
 THRESHOLDS_MM = THRESHOLDS_IN * 25.4
-PERIOD_IDS = np.array(["full", "normals", "recent"])
 
 CWA_URL = (
     "https://mapservices.weather.noaa.gov/static/rest/services/"
     "nws_reference_maps/nws_reference_map/FeatureServer/1/query"
 )
-NCSS_ROOT = "https://www.ncei.noaa.gov/thredds/ncss/grid/nclimgrid-daily"
+OPENDAP_ROOT = "https://www.ncei.noaa.gov/thredds/dodsC/nclimgrid-daily"
 USER_AGENT = "LIX-heavy-rain-climatology/1.0 (NOAA climate analysis; GitHub Pages)"
 
 
@@ -54,7 +55,12 @@ def parse_args() -> argparse.Namespace:
         help="Latest complete calendar year to include (default: previous UTC year).",
     )
     parser.add_argument("--rebuild", action="store_true", help="Ignore saved aggregation state.")
-    parser.add_argument("--workers", type=int, default=int(os.environ.get("NCLIMGRID_WORKERS", "8")))
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("NCLIMGRID_WORKERS", "6")),
+        help="Concurrent monthly OPeNDAP reads.",
+    )
     return parser.parse_args()
 
 
@@ -104,7 +110,7 @@ def period_metadata(end_year: int) -> list[dict]:
 
 
 def period_indexes_for_year(year: int) -> list[int]:
-    indexes = [0]  # full record
+    indexes = [0]
     if 1991 <= year <= 2020:
         indexes.append(1)
     if year >= 2001:
@@ -114,66 +120,79 @@ def period_indexes_for_year(year: int) -> list[int]:
 
 def dataset_candidates(year: int, month: int) -> list[str]:
     ym = f"{year}{month:02d}"
+    # The combined ncdd file is the operational nClimGrid-Daily product. The
+    # prelim name is retained as a fallback for the newest complete year if NCEI
+    # has not yet promoted a month to scaled/final naming.
     return [
         f"ncdd-{ym}-grd-scaled.nc",
-        f"prcp-{ym}-grd-scaled.nc",
         f"ncdd-{ym}-grd-prelim.nc",
-        f"prcp-{ym}-grd-prelim.nc",
     ]
 
 
-def download_month(year: int, month: int, bbox: tuple[float, float, float, float], dest: Path) -> Path:
+def _read_opendap(
+    url: str,
+    bbox: tuple[float, float, float, float],
+    engine: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     west, south, east, north = bbox
-    params = {
-        "var": "prcp",
-        "north": f"{north:.5f}",
-        "south": f"{south:.5f}",
-        "east": f"{east:.5f}",
-        "west": f"{west:.5f}",
-        "horizStride": "1",
-        "accept": "netcdf4",
-    }
-    errors = []
-    for filename in dataset_candidates(year, month):
-        url = f"{NCSS_ROOT}/{year}/{filename}"
-        for attempt in range(4):
-            try:
-                response = requests.get(
-                    url,
-                    params=params,
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=(20, 180),
-                )
-                if response.status_code == 404:
-                    break
-                response.raise_for_status()
-                if len(response.content) < 1024:
-                    raise RuntimeError(f"suspiciously small NCSS response ({len(response.content)} bytes)")
-                dest.write_bytes(response.content)
-                return dest
-            except Exception as exc:  # noqa: BLE001 - retain context across retries
-                errors.append(f"{filename} attempt {attempt + 1}: {exc}")
-                if attempt < 3:
-                    time.sleep(2 ** attempt)
-        # Move to the next filename after a 404 or exhausted retries.
-    raise RuntimeError(f"Unable to download {year}-{month:02d}: " + " | ".join(errors[-6:]))
+    open_kwargs = {"engine": engine, "decode_times": True}
+    if engine == "pydap":
+        # Keep the pydap client from attempting DAP4 against servers/products
+        # where DAP2 is the most reliable path.
+        open_kwargs["backend_kwargs"] = {"session": requests.Session()}
 
-
-def open_precip(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    with xr.open_dataset(path, engine="netcdf4") as ds:
+    with xr.open_dataset(url, **open_kwargs) as ds:
         if "prcp" not in ds:
-            raise RuntimeError(f"{path.name} does not contain prcp")
-        da = ds["prcp"].transpose("time", "lat", "lon")
-        values = da.values.astype(np.float32, copy=False)
-        lats = ds["lat"].values.astype(np.float64)
-        lons = ds["lon"].values.astype(np.float64)
-        dates = pd.to_datetime(ds["time"].values).strftime("%Y%m%d").astype(np.int32)
+            raise RuntimeError("dataset does not contain prcp")
+        if "lat" not in ds.coords or "lon" not in ds.coords:
+            raise RuntimeError("dataset is missing lat/lon coordinates")
+
+        lat_values = np.asarray(ds["lat"].values)
+        lon_values = np.asarray(ds["lon"].values)
+        lat_slice = slice(south, north) if lat_values[0] <= lat_values[-1] else slice(north, south)
+        lon_slice = slice(west, east) if lon_values[0] <= lon_values[-1] else slice(east, west)
+
+        da = ds["prcp"].sel(lat=lat_slice, lon=lon_slice).transpose("time", "lat", "lon")
+        da = da.load()
+        if da.size == 0:
+            raise RuntimeError("OPeNDAP subset returned no precipitation cells")
+
+        values = np.asarray(da.values, dtype=np.float32)
+        lats = np.asarray(da["lat"].values, dtype=np.float64)
+        lons = np.asarray(da["lon"].values, dtype=np.float64)
+        dates = pd.to_datetime(np.asarray(da["time"].values)).strftime("%Y%m%d").astype(np.int32)
+
     return values, lats, lons, dates
 
 
-def initialize_state(first_file: Path, cwa_geometry, end_year: int) -> dict:
-    values, grid_lats, grid_lons, _ = open_precip(first_file)
-    del values
+def fetch_month(
+    year: int,
+    month: int,
+    bbox: tuple[float, float, float, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    errors: list[str] = []
+    for filename in dataset_candidates(year, month):
+        url = f"{OPENDAP_ROOT}/{year}/{filename}"
+        # netCDF4's DAP client is fast when available; pydap is an independent
+        # fallback that has proven useful when the native DAP client balks.
+        for engine in ("netcdf4", "pydap"):
+            for attempt in range(1, 4):
+                try:
+                    return _read_opendap(url, bbox, engine)
+                except Exception as exc:  # noqa: BLE001 - retry remote service failures
+                    errors.append(f"{filename} {engine} attempt {attempt}: {exc}")
+                    if attempt < 3:
+                        time.sleep(min(8, 2 ** (attempt - 1)))
+    tail = " | ".join(errors[-8:])
+    raise RuntimeError(f"Unable to read {year}-{month:02d} through OPeNDAP: {tail}")
+
+
+def initialize_state(
+    grid_lats: np.ndarray,
+    grid_lons: np.ndarray,
+    cwa_geometry,
+    end_year: int,
+) -> dict:
     lon2d, lat2d = np.meshgrid(grid_lons, grid_lats)
     inside = contains_xy(cwa_geometry, lon2d, lat2d)
     rows, cols = np.where(inside)
@@ -184,8 +203,8 @@ def initialize_state(first_file: Path, cwa_geometry, end_year: int) -> dict:
     return {
         "last_year": START_YEAR - 1,
         "thresholds_in": THRESHOLDS_IN.copy(),
-        "grid_lats": grid_lats,
-        "grid_lons": grid_lons,
+        "grid_lats": grid_lats.copy(),
+        "grid_lons": grid_lons.copy(),
         "rows": rows.astype(np.int16),
         "cols": cols.astype(np.int16),
         "point_lats": grid_lats[rows].astype(np.float32),
@@ -204,10 +223,10 @@ def load_state(end_year: int, rebuild: bool) -> dict | None:
         saved_thresholds = z["thresholds_in"]
         last_year = int(z["last_year"])
         if not np.array_equal(saved_thresholds, THRESHOLDS_IN):
-            print("Threshold definition changed; rebuilding from 1951.")
+            print("Threshold definition changed; rebuilding from 1951.", flush=True)
             return None
         if last_year > end_year:
-            print("Saved state extends beyond requested end year; rebuilding.")
+            print("Saved state extends beyond requested end year; rebuilding.", flush=True)
             return None
         return {
             "last_year": last_year,
@@ -243,12 +262,22 @@ def save_state(state: dict) -> None:
     )
 
 
-def process_month(path: Path, year: int, month: int, state: dict) -> None:
-    values, lats, lons, dates = open_precip(path)
+def process_month_data(
+    data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    year: int,
+    month: int,
+    state: dict,
+) -> None:
+    values, lats, lons, dates = data
     if values.shape[1:] != (len(state["grid_lats"]), len(state["grid_lons"])):
-        raise RuntimeError(f"Grid shape changed in {path.name}: {values.shape[1:]}")
-    if not np.allclose(lats, state["grid_lats"], atol=1e-6) or not np.allclose(lons, state["grid_lons"], atol=1e-6):
-        raise RuntimeError(f"Grid coordinates changed in {path.name}")
+        raise RuntimeError(
+            f"Grid shape changed in {year}-{month:02d}: "
+            f"{values.shape[1:]} != {(len(state['grid_lats']), len(state['grid_lons']))}"
+        )
+    if not np.allclose(lats, state["grid_lats"], atol=1e-6) or not np.allclose(
+        lons, state["grid_lons"], atol=1e-6
+    ):
+        raise RuntimeError(f"Grid coordinates changed in {year}-{month:02d}")
 
     selected = values[:, state["rows"], state["cols"]]
     selected_safe = np.where(np.isfinite(selected), selected, -np.inf)
@@ -270,39 +299,38 @@ def process_month(path: Path, year: int, month: int, state: dict) -> None:
         state["max_date"][period_index, update] = month_dates[update]
 
 
-def process_years(state: dict, bbox: tuple[float, float, float, float], start_year: int, end_year: int, workers: int) -> None:
-    if start_year > end_year:
-        print("Aggregation state is already current.")
+def process_jobs(
+    state: dict,
+    bbox: tuple[float, float, float, float],
+    jobs: Iterable[tuple[int, int]],
+    workers: int,
+) -> None:
+    jobs = list(jobs)
+    total = len(jobs)
+    if total == 0:
         return
 
-    jobs = [(year, month) for year in range(start_year, end_year + 1) for month in range(1, 13)]
-    total = len(jobs)
+    print(f"Processing {total} monthly OPeNDAP subsets with {workers} workers.", flush=True)
+    failures: list[str] = []
     completed = 0
-    print(f"Processing {total} monthly files ({start_year}–{end_year}) with {workers} workers.")
 
-    with tempfile.TemporaryDirectory(prefix="lix-rain-") as tmp_name:
-        tmp = Path(tmp_name)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(download_month, y, m, bbox, tmp / f"{y}{m:02d}.nc"): (y, m)
-                for y, m in jobs
-            }
-            errors = []
-            for future in as_completed(futures):
-                year, month = futures[future]
-                try:
-                    path = future.result()
-                    process_month(path, year, month, state)
-                    path.unlink(missing_ok=True)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{year}-{month:02d}: {exc}")
-                completed += 1
-                if completed % 24 == 0 or completed == total:
-                    print(f"  {completed}/{total} months complete")
-            if errors:
-                raise RuntimeError("Monthly processing failures:\n" + "\n".join(errors[:20]))
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        futures = {executor.submit(fetch_month, y, m, bbox): (y, m) for y, m in jobs}
+        for future in as_completed(futures):
+            year, month = futures[future]
+            try:
+                data = future.result()
+                process_month_data(data, year, month, state)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{year}-{month:02d}: {exc}")
+            completed += 1
+            if completed % 12 == 0 or completed == total:
+                print(f"  {completed}/{total} months complete", flush=True)
 
-    state["last_year"] = end_year
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} monthly OPeNDAP reads failed:\n" + "\n".join(failures[:30])
+        )
 
 
 def write_period_json(state: dict, meta: dict, period_index: int) -> None:
@@ -312,14 +340,12 @@ def write_period_json(state: dict, meta: dict, period_index: int) -> None:
     max_date = state["max_date"][period_index]
 
     for i in range(len(state["point_lats"])):
-        point_counts = counts[:, :, i].astype(int).tolist()
-        mx = float(max_mm[i]) if np.isfinite(max_mm[i]) else None
         points.append(
             {
                 "lat": round(float(state["point_lats"][i]), 5),
                 "lon": round(float(state["point_lons"][i]), 5),
-                "c": point_counts,
-                "mx": None if mx is None else round(mx, 2),
+                "c": counts[:, :, i].astype(int).tolist(),
+                "mx": round(float(max_mm[i]), 2) if np.isfinite(max_mm[i]) else None,
                 "md": int(max_date[i]) if max_date[i] else None,
             }
         )
@@ -331,7 +357,10 @@ def write_period_json(state: dict, meta: dict, period_index: int) -> None:
     }
     output = DOCS_DATA / Path(meta["file"]).name
     output.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    print(f"Wrote {output.relative_to(ROOT)} ({output.stat().st_size / 1_000_000:.1f} MB)")
+    print(
+        f"Wrote {output.relative_to(ROOT)} ({output.stat().st_size / 1_000_000:.1f} MB)",
+        flush=True,
+    )
 
 
 def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
@@ -353,7 +382,10 @@ def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
         "thresholds_in": THRESHOLDS_IN.astype(float).tolist(),
         "periods": periods,
         "cwa_file": "data/lix_cwa.geojson",
-        "daily_period_note": "Each value is the 24-hour precipitation total ending in the early morning of the labeled day.",
+        "daily_period_note": (
+            "Each value is the 24-hour precipitation total ending in the early morning "
+            "of the labeled day."
+        ),
     }
     (DOCS_DATA / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -367,40 +399,37 @@ def main() -> None:
     cwa_geojson = fetch_cwa()
     cwa_geometry = shape(cwa_geojson["features"][0]["geometry"])
     west, south, east, north = cwa_geometry.bounds
-    # Small padding ensures all CWA-edge grid centers are returned by NCSS.
     bbox = (west - 0.10, south - 0.10, east + 0.10, north + 0.10)
-    print(f"LIX CWA bbox: {bbox}")
+    print(f"LIX CWA bbox: {bbox}", flush=True)
 
     state = load_state(args.end_year, args.rebuild)
     if state is None:
-        # One synchronous file establishes the exact NCSS grid and CWA mask.
-        with tempfile.TemporaryDirectory(prefix="lix-init-") as tmp_name:
-            first_path = Path(tmp_name) / f"{START_YEAR}01.nc"
-            download_month(START_YEAR, 1, bbox, first_path)
-            state = initialize_state(first_path, cwa_geometry, args.end_year)
-            process_month(first_path, START_YEAR, 1, state)
-        # Process the remaining 11 months of the first year, then all later years.
-        with tempfile.TemporaryDirectory(prefix="lix-firstyear-") as tmp_name:
-            tmp = Path(tmp_name)
-            with ThreadPoolExecutor(max_workers=min(args.workers, 6)) as executor:
-                futures = {
-                    executor.submit(download_month, START_YEAR, m, bbox, tmp / f"{START_YEAR}{m:02d}.nc"): m
-                    for m in range(2, 13)
-                }
-                for future in as_completed(futures):
-                    m = futures[future]
-                    path = future.result()
-                    process_month(path, START_YEAR, m, state)
-                    path.unlink(missing_ok=True)
-        state["last_year"] = START_YEAR
-        process_years(state, bbox, START_YEAR + 1, args.end_year, args.workers)
+        print("Reading 1951-01 to establish the nClimGrid subset and CWA mask…", flush=True)
+        first = fetch_month(START_YEAR, 1, bbox)
+        state = initialize_state(first[1], first[2], cwa_geometry, args.end_year)
+        process_month_data(first, START_YEAR, 1, state)
+
+        jobs = [
+            (year, month)
+            for year in range(START_YEAR, args.end_year + 1)
+            for month in range(1, 13)
+            if not (year == START_YEAR and month == 1)
+        ]
+        process_jobs(state, bbox, jobs, args.workers)
+        state["last_year"] = args.end_year
     else:
-        print(f"Loaded aggregation state through {state['last_year']}.")
-        process_years(state, bbox, state["last_year"] + 1, args.end_year, args.workers)
+        print(f"Loaded aggregation state through {state['last_year']}.", flush=True)
+        jobs = [
+            (year, month)
+            for year in range(state["last_year"] + 1, args.end_year + 1)
+            for month in range(1, 13)
+        ]
+        process_jobs(state, bbox, jobs, args.workers)
+        state["last_year"] = args.end_year
 
     save_state(state)
     write_outputs(state, cwa_geojson, args.end_year)
-    print(f"Done. Climatology is current through {args.end_year}.")
+    print(f"Done. Climatology is current through {args.end_year}.", flush=True)
 
 
 if __name__ == "__main__":
