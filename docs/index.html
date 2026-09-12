@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Interactive heavy-rain climatology for the NWS New Orleans/Baton Rouge forecast area." />
+  <title>LIX Heavy-Rain Climatology</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div>
+      <div class="eyebrow">NWS New Orleans / Baton Rouge · LIX</div>
+      <h1>Heavy-Rain Climatology</h1>
+      <p>How often does a location get a really big 24-hour rain?</p>
+    </div>
+    <button id="aboutBtn" class="ghost-button" type="button">Methodology</button>
+  </header>
+
+  <main class="layout">
+    <aside class="panel controls" aria-label="Map controls">
+      <section>
+        <h2>Threshold</h2>
+        <div id="thresholdButtons" class="threshold-grid" role="group" aria-label="Rainfall threshold"></div>
+      </section>
+
+      <section class="control-row">
+        <label for="periodSelect">Climatology period</label>
+        <select id="periodSelect"></select>
+      </section>
+
+      <section class="control-row">
+        <label for="seasonSelect">Season</label>
+        <select id="seasonSelect">
+          <option value="annual">Annual</option>
+          <option value="djf">Winter (Dec–Feb)</option>
+          <option value="mam">Spring (Mar–May)</option>
+          <option value="jja">Summer (Jun–Aug)</option>
+          <option value="son">Fall (Sep–Nov)</option>
+        </select>
+      </section>
+
+      <section class="metric-card" aria-live="polite">
+        <div class="metric-label">CWA median</div>
+        <div id="medianMetric" class="metric-value">—</div>
+        <div id="medianDetail" class="metric-sub">Loading climatology…</div>
+      </section>
+
+      <section class="mini-stats">
+        <div>
+          <span>Wettest grid</span>
+          <strong id="maxMetric">—</strong>
+        </div>
+        <div>
+          <span>90th percentile</span>
+          <strong id="p90Metric">—</strong>
+        </div>
+        <div>
+          <span>Grid points</span>
+          <strong id="pointMetric">—</strong>
+        </div>
+      </section>
+
+      <section class="interpretation">
+        <h2>Read it this way</h2>
+        <p id="interpretationText">Choose a threshold to map the average number of exceedance days per year.</p>
+      </section>
+    </aside>
+
+    <section class="map-wrap" aria-label="Heavy rain climatology map">
+      <div id="map"></div>
+      <div id="status" class="status-pill">Loading NOAA climatology…</div>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <aside class="panel hotspots" aria-label="Local rainfall hot spots">
+      <div class="panel-heading">
+        <div>
+          <div class="eyebrow">Spatially separated maxima</div>
+          <h2>Local hot spots</h2>
+        </div>
+        <span class="badge">≥15 mi apart</span>
+      </div>
+      <p class="muted">Nearby top-ranked pixels are suppressed so one wet pocket does not fill the whole list.</p>
+      <div id="hotspotList" class="hotspot-list"></div>
+    </aside>
+  </main>
+
+  <section class="source-strip">
+    <strong>Source:</strong> NOAA/NCEI nClimGrid-Daily v1.0.0 · ~5-km grid · 1951–present. Values are fixed daily 24-hour totals ending in the early morning, not arbitrary rolling 24-hour windows.
+  </section>
+
+  <dialog id="aboutDialog">
+    <form method="dialog" class="dialog-card">
+      <div class="dialog-header">
+        <div>
+          <div class="eyebrow">How this map is built</div>
+          <h2>Methodology & caveats</h2>
+        </div>
+        <button class="close-button" aria-label="Close" value="cancel">×</button>
+      </div>
+      <p>The analysis counts nClimGrid-Daily grid-cell days meeting each precipitation threshold, then divides by the number of complete years in the selected climatological period. Seasonal views use the same method for the selected calendar months.</p>
+      <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI specifically notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent maxima are more trustworthy than one isolated pixel.</p>
+      <p>The “local hot spots” list ranks the selected frequency field while requiring at least 15 miles between listed points. It is a simple spatial-separation filter, not a formal statistical cluster analysis.</p>
+      <p>The map intentionally uses the latest <strong>complete calendar year</strong>, avoiding a partial current year in the climatology.</p>
+      <div class="dialog-actions">
+        <a href="https://www.ncei.noaa.gov/products/land-based-station/nclimgrid-daily" target="_blank" rel="noreferrer">NOAA dataset documentation ↗</a>
+        <button value="cancel">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

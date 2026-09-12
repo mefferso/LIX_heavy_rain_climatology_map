@@ -1,0 +1,6 @@
+numpy>=2.0,<3
+pandas>=2.2,<3
+requests>=2.32,<3
+xarray>=2025.1
+netCDF4>=1.7
+shapely>=2.0,<3
