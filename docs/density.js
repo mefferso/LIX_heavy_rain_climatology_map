@@ -1,4 +1,4 @@
-/* global L, map, state */
+/* global L, map, state, render */
 (() => {
   const density = { enabled: false, layer: null, cache: new Map(), token: 0 };
 
@@ -7,14 +7,19 @@
     if (!anchor || document.getElementById('densityToggle')) return;
     const section = document.createElement('section');
     section.className = 'control-row';
-    section.innerHTML = '<label>Data support</label><button id="densityToggle" type="button" class="mode-button" aria-pressed="false">Observation support</button>';
+    section.innerHTML = '<label>Data support</label><button id="densityToggle" type="button" class="mode-button" aria-pressed="false">Observation support (30 mi)</button>';
     anchor.insertAdjacentElement('afterend', section);
     document.getElementById('densityToggle').addEventListener('click', () => {
       density.enabled = !density.enabled;
       const button = document.getElementById('densityToggle');
       button.classList.toggle('active', density.enabled);
       button.setAttribute('aria-pressed', density.enabled ? 'true' : 'false');
-      refreshDensity();
+      if (density.enabled) {
+        refreshDensity();
+      } else {
+        clearDensity();
+        render();
+      }
     });
   }
 
@@ -73,14 +78,17 @@
     document.getElementById('densityLegendBlock')?.remove();
   }
 
+  function hideClimatologyLayer() {
+    if (state.pointLayer) {
+      state.pointLayer.remove();
+      state.pointLayer = null;
+    }
+  }
+
   function addLegend(low, high, comparison) {
     const legend = document.getElementById('legend');
     if (!legend) return;
-    const block = document.createElement('div');
-    block.id = 'densityLegendBlock';
-    block.style.cssText = 'margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.16)';
-    block.innerHTML = `<div class="legend-title">Observation support · precip obs/day</div><div class="legend-ramp" style="background:linear-gradient(90deg,#ef4444,#f97316,#facc15,#84cc16,#22c55e,#06b6d4,#3b82f6)"></div><div class="legend-labels"><span>sparser ${fmt(low)}</span><span>denser ${fmt(high)}</span></div><div class="tooltip-small" style="margin-top:6px">${comparison ? 'Comparison rings use the lower-support period at each grid point. ' : ''}Colors span the visible 5th–95th percentile and are not formal confidence categories.</div>`;
-    legend.appendChild(block);
+    legend.innerHTML = `<div id="densityLegendBlock"><div class="legend-title">Observation support · precip obs/day within 30 mi</div><div class="legend-ramp" style="background:linear-gradient(90deg,#ef4444,#f97316,#facc15,#84cc16,#22c55e,#06b6d4,#3b82f6)"></div><div class="legend-labels"><span>sparser ${fmt(low)}</span><span>denser ${fmt(high)}</span></div><div class="tooltip-small" style="margin-top:6px">${comparison ? 'Comparison rings use the lower-support period at each grid point. ' : ''}NOAA’s auxiliary count uses a fixed 30-mile search radius. Colors span the visible 5th–95th percentile and are not formal confidence categories.</div></div>`;
   }
 
   async function buildItems() {
@@ -110,7 +118,7 @@
         lat: p.lat,
         lon: p.lon,
         value,
-        detail: `${data.period.label}: ${fmt(value)} mean nearby precip observations/day`,
+        detail: `${data.period.label}: ${fmt(value)} mean precip observations/day within 30 mi`,
       };
     });
   }
@@ -118,10 +126,12 @@
   async function refreshDensity() {
     clearDensity();
     if (!density.enabled || !state.manifest?.observation_density?.available) return;
+    hideClimatologyLayer();
     const token = ++density.token;
     try {
       const items = await buildItems();
       if (token !== density.token || !density.enabled) return;
+      hideClimatologyLayer();
       const values = items.map(x => x.value).filter(Number.isFinite).sort((a, b) => a - b);
       const low = quantile(values, 0.05);
       const high = quantile(values, 0.95);
@@ -135,7 +145,7 @@
           weight: 2.4,
         });
         ring.bindTooltip(
-          `<div class="tooltip-title">Observation support</div><div><strong>${fmt(item.value)} nearby precip obs/day</strong></div><div class="tooltip-small">${item.detail}<br>Grid center: ${item.lat.toFixed(3)}°, ${item.lon.toFixed(3)}°</div>`,
+          `<div class="tooltip-title">Observation support</div><div><strong>${fmt(item.value)} precip obs/day within 30 mi</strong></div><div class="tooltip-small">${item.detail}<br>Grid center: ${item.lat.toFixed(3)}°, ${item.lon.toFixed(3)}°</div>`,
           { className: 'grid-tooltip', direction: 'top', opacity: 0.98, sticky: true },
         );
         ring.addTo(layer);
@@ -147,6 +157,7 @@
     } catch (error) {
       console.warn('Observation-support layer unavailable', error);
       clearDensity();
+      if (density.enabled) render();
     }
   }
 
