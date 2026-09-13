@@ -3,10 +3,12 @@
 const state = {
   manifest: null,
   mode: 'period',
+  displayMode: 'exceedance',
   selectionId: null,
   data: null,
   comparison: null,
   thresholdIndex: 1,
+  rangeIndex: 0,
   season: 'annual',
   boundary: null,
   pointLayer: null,
@@ -30,6 +32,15 @@ const seasonNames = {
   son: 'fall',
 };
 
+const rangeSpecs = [
+  { label: '1–<2"', lowerIndex: 0, upperIndex: 1 },
+  { label: '2–<3"', lowerIndex: 1, upperIndex: 2 },
+  { label: '3–<5"', lowerIndex: 2, upperIndex: 3 },
+  { label: '5–<8"', lowerIndex: 3, upperIndex: 4 },
+  { label: '8–<10"', lowerIndex: 4, upperIndex: 5 },
+  { label: '≥10"', lowerIndex: 5, upperIndex: null },
+];
+
 const map = L.map('map', {
   center: [30.15, -90.25],
   zoom: 8,
@@ -47,6 +58,8 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const canvasRenderer = L.canvas({ padding: 0.5, tolerance: 5 });
 
 const els = {
+  displayModeButtons: document.getElementById('displayModeButtons'),
+  measureHeading: document.getElementById('measureHeading'),
   thresholdButtons: document.getElementById('thresholdButtons'),
   periodSelect: document.getElementById('periodSelect'),
   seasonSelect: document.getElementById('seasonSelect'),
@@ -73,6 +86,18 @@ els.seasonSelect.addEventListener('change', () => {
 els.periodSelect.addEventListener('change', async () => {
   state.selectionId = els.periodSelect.value;
   await loadSelection(state.selectionId);
+  render();
+});
+els.displayModeButtons.addEventListener('click', event => {
+  const button = event.target.closest('.mode-button');
+  if (!button) return;
+  state.displayMode = button.dataset.mode;
+  document.querySelectorAll('.mode-button').forEach(btn => {
+    const active = btn.dataset.mode === state.displayMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  buildMeasureButtons();
   render();
 });
 
@@ -110,25 +135,39 @@ function formatDelta(v, long = true) {
   return long ? `${sign}${formatShortRate(v)} days/yr` : `${sign}${formatShortRate(v)}`;
 }
 
-function recurrenceText(rate) {
-  if (!rate) return 'No exceedance in this period';
+function frequencyText(rate) {
+  if (!rate) return 'No matching days in this period';
   const years = 1 / rate;
-  if (rate >= 1) return `about ${rate.toFixed(1)} exceedance days each year`;
-  if (years < 10) return `about one exceedance day every ${years.toFixed(1)} years`;
-  return `about one exceedance day every ${Math.round(years)} years`;
+  if (rate >= 1) return `about ${rate.toFixed(1)} matching days each year`;
+  if (years < 10) return `about one matching day every ${years.toFixed(1)} years`;
+  return `about one matching day every ${Math.round(years)} years`;
 }
 
-function rateForPoint(point, data) {
-  const months = seasonMonths[state.season];
-  const counts = point.c[state.thresholdIndex];
-  const total = months.reduce((sum, m) => sum + (counts[m] || 0), 0);
-  return total / data.period.years;
+function currentMeasure() {
+  if (state.displayMode === 'range') {
+    return { ...rangeSpecs[state.rangeIndex], kind: 'range' };
+  }
+  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  return { label: `≥${threshold}"`, threshold, lowerIndex: state.thresholdIndex, upperIndex: null, kind: 'exceedance' };
+}
+
+function monthlyCountsForPoint(point) {
+  if (state.displayMode === 'exceedance') return point.c[state.thresholdIndex];
+  const spec = rangeSpecs[state.rangeIndex];
+  const lower = point.c[spec.lowerIndex];
+  if (spec.upperIndex === null) return lower;
+  const upper = point.c[spec.upperIndex];
+  return lower.map((value, month) => Math.max(0, value - (upper[month] || 0)));
 }
 
 function countForPoint(point) {
   const months = seasonMonths[state.season];
-  const counts = point.c[state.thresholdIndex];
-  return months.reduce((sum, m) => sum + (counts[m] || 0), 0);
+  const counts = monthlyCountsForPoint(point);
+  return months.reduce((sum, month) => sum + (counts[month] || 0), 0);
+}
+
+function rateForPoint(point, data) {
+  return countForPoint(point) / data.period.years;
 }
 
 function sequentialColor(value, scaleMax) {
@@ -156,27 +195,28 @@ function dateText(yyyymmdd) {
 }
 
 function periodTooltipHtml(point, rate) {
-  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  const measure = currentMeasure();
   const count = countForPoint(point);
   const maxIn = point.mx ? point.mx / 25.4 : null;
+  const dayLabel = measure.kind === 'range' ? 'range day' : 'exceedance day';
   return `
-    <div class="tooltip-title">≥${threshold}" in 24 hr</div>
+    <div class="tooltip-title">${measure.label} in 24 hr</div>
     <div><strong>${formatRate(rate)}</strong></div>
     <div class="tooltip-small">
-      ${count} exceedance day${count === 1 ? '' : 's'} in ${state.data.period.label}<br>
-      ${recurrenceText(rate)}<br>
+      ${count} ${dayLabel}${count === 1 ? '' : 's'} in ${state.data.period.label}<br>
+      ${frequencyText(rate)}<br>
       Grid center: ${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°<br>
       Period max: ${maxIn ? `${maxIn.toFixed(2)}"` : '—'} ${point.md ? `on ${dateText(point.md)}` : ''}
     </div>`;
 }
 
 function comparisonTooltipHtml(item) {
-  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  const measure = currentMeasure();
   const c = state.comparison;
   let pct = '—';
   if (item.olderRate > 0) pct = `${item.delta >= 0 ? '+' : ''}${((item.delta / item.olderRate) * 100).toFixed(1)}%`;
   return `
-    <div class="tooltip-title">≥${threshold}" in 24 hr · change</div>
+    <div class="tooltip-title">${measure.label} in 24 hr · change</div>
     <div><strong>${formatDelta(item.delta)}</strong></div>
     <div class="tooltip-small">
       ${c.newer.label}: ${formatRate(item.newerRate)}<br>
@@ -199,6 +239,8 @@ function renderItems() {
 }
 
 function updateStats(items) {
+  const measure = currentMeasure();
+  const season = seasonNames[state.season];
   if (state.mode === 'period') {
     const rates = items.map(x => x.rate).filter(Number.isFinite).sort((a, b) => a - b);
     const median = quantile(rates, 0.5);
@@ -206,16 +248,18 @@ function updateStats(items) {
     const max = rates.length ? rates[rates.length - 1] : 0;
     els.medianLabel.textContent = 'CWA median';
     els.medianMetric.textContent = formatRate(median);
-    els.medianDetail.textContent = recurrenceText(median);
+    els.medianDetail.textContent = frequencyText(median);
     els.maxLabel.textContent = 'Wettest grid';
     els.maxMetric.textContent = formatShortRate(max) + '/yr';
     els.p90Label.textContent = '90th percentile';
     els.p90Metric.textContent = formatShortRate(p90) + '/yr';
     els.pointMetric.textContent = state.data.points.length.toLocaleString();
 
-    const threshold = state.manifest.thresholds_in[state.thresholdIndex];
-    const season = seasonNames[state.season];
-    els.interpretationText.textContent = `Each pixel shows the average number of ${season} days per year with at least ${threshold}" of precipitation during ${state.data.period.label}.`;
+    if (measure.kind === 'range') {
+      els.interpretationText.textContent = `Each pixel shows the average number of ${season} days per year with a daily precipitation total in the ${measure.label} range during ${state.data.period.label}. Ranges are mutually exclusive.`;
+    } else {
+      els.interpretationText.textContent = `Each pixel shows the average number of ${season} days per year with at least ${measure.threshold}" of precipitation during ${state.data.period.label}.`;
+    }
   } else {
     const deltas = items.map(x => x.delta).filter(Number.isFinite).sort((a, b) => a - b);
     const median = quantile(deltas, 0.5);
@@ -230,20 +274,19 @@ function updateStats(items) {
     els.p90Metric.textContent = formatDelta(p90, false) + '/yr';
     els.pointMetric.textContent = items.length.toLocaleString();
 
-    const threshold = state.manifest.thresholds_in[state.thresholdIndex];
-    const season = seasonNames[state.season];
-    els.interpretationText.textContent = `Each pixel shows the change in average ${season} exceedance days per year for ≥${threshold}": ${state.comparison.newer.label} minus ${state.comparison.older.label}. Warm colors mean more frequent heavy-rain days; blue means less frequent.`;
+    const descriptor = measure.kind === 'range' ? `${measure.label} range days` : `${measure.label} exceedance days`;
+    els.interpretationText.textContent = `Each pixel shows the change in average ${season} ${descriptor} per year: ${state.comparison.newer.label} minus ${state.comparison.older.label}. Warm colors mean more frequent days; blue means less frequent.`;
   }
 }
 
 function updateLegend(items) {
-  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  const measure = currentMeasure();
   if (state.mode === 'period') {
     const rates = items.map(x => x.rate);
     const positive = rates.filter(v => v > 0).sort((a, b) => a - b);
     const scaleMax = positive.length ? Math.max(quantile(positive, 0.95), positive[positive.length - 1] * 0.35) : 1;
     els.legend.innerHTML = `
-      <div class="legend-title">≥${threshold}" · exceedance days/yr</div>
+      <div class="legend-title">${measure.label} · days/yr</div>
       <div class="legend-ramp" style="background:linear-gradient(90deg,#18334a,#1f6475,#2a8c82,#67ad6c,#c1c85c,#f2b24f,#ec7845,#d84455,#9e2f68)"></div>
       <div class="legend-labels"><span>0</span><span>${formatShortRate(scaleMax / 2)}</span><span>≥${formatShortRate(scaleMax)}</span></div>
       <div class="tooltip-small" style="margin-top:6px">Scale capped near the upper tail so local structure remains visible. Hover for exact values.</div>`;
@@ -253,7 +296,7 @@ function updateLegend(items) {
   const abs = items.map(x => Math.abs(x.delta)).filter(v => v > 0).sort((a, b) => a - b);
   const scaleMax = abs.length ? Math.max(quantile(abs, 0.95), abs[abs.length - 1] * 0.35) : 1;
   els.legend.innerHTML = `
-    <div class="legend-title">≥${threshold}" · change in days/yr</div>
+    <div class="legend-title">${measure.label} · change in days/yr</div>
     <div class="legend-ramp" style="background:linear-gradient(90deg,#1e3a8a,#2563eb,#93c5fd,#e5e7eb,#fcd34d,#ef4444,#9f1239)"></div>
     <div class="legend-labels"><span>≤−${formatShortRate(scaleMax)}</span><span>0</span><span>≥+${formatShortRate(scaleMax)}</span></div>
     <div class="tooltip-small" style="margin-top:6px">Newer minus older period. Symmetric scale centered on zero; hover for exact rates and percent change.</div>`;
@@ -292,8 +335,9 @@ function render() {
   state.pointLayer = layer;
 
   document.querySelectorAll('.threshold-button').forEach((btn, idx) => {
-    btn.classList.toggle('active', idx === state.thresholdIndex);
-    btn.setAttribute('aria-pressed', idx === state.thresholdIndex ? 'true' : 'false');
+    const activeIndex = state.displayMode === 'range' ? state.rangeIndex : state.thresholdIndex;
+    btn.classList.toggle('active', idx === activeIndex);
+    btn.setAttribute('aria-pressed', idx === activeIndex ? 'true' : 'false');
   });
 }
 
@@ -338,20 +382,34 @@ async function loadSelection(selectionId) {
   els.status.classList.add('ready');
 }
 
-function buildControls() {
+function buildMeasureButtons() {
   els.thresholdButtons.innerHTML = '';
-  state.manifest.thresholds_in.forEach((threshold, idx) => {
+  const isRange = state.displayMode === 'range';
+  els.measureHeading.textContent = isRange ? 'Rainfall range' : 'Threshold';
+  els.thresholdButtons.setAttribute('aria-label', isRange ? 'Rainfall range' : 'Rainfall threshold');
+
+  const measures = isRange
+    ? rangeSpecs.map(spec => spec.label)
+    : state.manifest.thresholds_in.map(threshold => `≥${threshold}"`);
+
+  measures.forEach((label, idx) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'threshold-button';
-    button.textContent = `≥${threshold}"`;
-    button.setAttribute('aria-pressed', idx === state.thresholdIndex ? 'true' : 'false');
+    button.textContent = label;
+    const activeIndex = isRange ? state.rangeIndex : state.thresholdIndex;
+    button.setAttribute('aria-pressed', idx === activeIndex ? 'true' : 'false');
     button.addEventListener('click', () => {
-      state.thresholdIndex = idx;
+      if (isRange) state.rangeIndex = idx;
+      else state.thresholdIndex = idx;
       render();
     });
     els.thresholdButtons.appendChild(button);
   });
+}
+
+function buildControls() {
+  buildMeasureButtons();
 
   els.periodSelect.innerHTML = '';
   const periodsGroup = document.createElement('optgroup');
@@ -360,6 +418,7 @@ function buildControls() {
     const option = document.createElement('option');
     option.value = period.id;
     option.textContent = period.label;
+    option.title = period.label;
     periodsGroup.appendChild(option);
   });
   els.periodSelect.appendChild(periodsGroup);
@@ -371,6 +430,7 @@ function buildControls() {
       const option = document.createElement('option');
       option.value = comparison.id;
       option.textContent = comparison.label;
+      option.title = comparison.label;
       comparisonGroup.appendChild(option);
     });
     els.periodSelect.appendChild(comparisonGroup);
