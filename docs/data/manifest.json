@@ -1,6 +1,6 @@
 {
   "status": "ready",
-  "generated_utc": "2026-09-13T18:11:37.204034+00:00",
+  "generated_utc": "2026-09-13T18:35:37.761658+00:00",
   "source": "NOAA/NCEI nClimGrid-Daily v1.0.0 via NOAA Open Data Dissemination",
   "source_url": "https://registry.opendata.aws/noaa-nclimgrid-daily/",
   "grid_resolution_deg": 0.041666666666666664,
@@ -95,5 +95,20 @@
   ],
   "cwa_file": "data/lix_cwa.geojson",
   "era_note": "The 2005\u20132025, 1985\u20132005, and 1965\u20131985 era labels are inclusive; adjacent eras therefore share the boundary year exactly as requested.",
-  "daily_period_note": "These are nClimGrid-Daily fixed daily precipitation analyses derived from GHCN-Daily station observations, not arbitrary rolling 24-hour maxima."
+  "daily_period_note": "These are nClimGrid-Daily fixed daily precipitation analyses derived from GHCN-Daily station observations, not arbitrary rolling 24-hour maxima.",
+  "observation_density": {
+    "available": true,
+    "source": "NOAA/NCEI nClimGrid-Daily-Auxiliary v1.0.0",
+    "source_url": "https://www.ncei.noaa.gov/products/land-based-station/nclimgrid-daily",
+    "description": "Mean daily number of precipitation input observations within 30 miles of each grid point.",
+    "files": {
+      "full": "data/observation_density_full.json",
+      "era_2005_2025": "data/observation_density_era_2005_2025.json",
+      "era_1985_2005": "data/observation_density_era_1985_2005.json",
+      "era_1965_1985": "data/observation_density_era_1965_1985.json",
+      "early_1951_1990": "data/observation_density_early_1951_1990.json",
+      "modern_1991_2025": "data/observation_density_modern_1991_2025.json"
+    },
+    "interpretation": "Higher counts indicate denser nearby observation support and typically lower uncertainty from station sparsity, but this is not a formal confidence score; local gradients, observation timing, topography, and interpolation also matter."
+  }
 }
