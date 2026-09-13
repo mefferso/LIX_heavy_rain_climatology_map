@@ -1,4 +1,4 @@
-name: Probe NOAA NODD nClimGrid layout
+name: Test NOAA NODD ranged NetCDF read
 
 on:
   push:
@@ -9,62 +9,47 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  test-read:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe public NOAA nClimGrid bucket
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install 'numpy<3' 'xarray>=2025.1' 'h5netcdf>=1.4' 'fsspec>=2025.1' 'requests>=2.32'
+
+      - name: Read a tiny LIX subset by HTTP range
         shell: bash
         run: |
           python - <<'PY'
-          import urllib.parse, urllib.request, xml.etree.ElementTree as ET
+          import fsspec
+          import numpy as np
+          import requests
+          import xarray as xr
 
-          BASE = "https://noaa-nclimgrid-daily-pds.s3.amazonaws.com/"
-          NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+          url = 'https://noaa-nclimgrid-daily-pds.s3.amazonaws.com/access/grids/1951/ncdd-195101-grd-scaled.nc'
+          r = requests.head(url, timeout=60)
+          r.raise_for_status()
+          print('HEAD', r.status_code, 'bytes', r.headers.get('content-length'), 'ranges', r.headers.get('accept-ranges'))
 
-          def listing(prefix="", delimiter="/"):
-              q = {"list-type": "2", "max-keys": "1000"}
-              if prefix:
-                  q["prefix"] = prefix
-              if delimiter:
-                  q["delimiter"] = delimiter
-              url = BASE + "?" + urllib.parse.urlencode(q)
-              print("GET", url)
-              with urllib.request.urlopen(url, timeout=60) as r:
-                  body = r.read()
-                  print("status", r.status, "bytes", len(body))
-              root = ET.fromstring(body)
-              prefixes = [e.text for e in root.findall("s3:CommonPrefixes/s3:Prefix", NS)]
-              keys = [e.text for e in root.findall("s3:Contents/s3:Key", NS)]
-              return prefixes, keys
-
-          prefixes, keys = listing()
-          print("ROOT PREFIXES:", prefixes)
-          print("ROOT KEYS (first 100):", keys[:100])
-
-          frontier = [(p, 1) for p in prefixes if not p.startswith("EpiNOAA/")]
-          seen = set()
-          target = ("ncdd-195101-grd-scaled.nc", "ncdd-195101-grd-prelim.nc")
-          while frontier:
-              prefix, depth = frontier.pop(0)
-              if prefix in seen or depth > 5:
-                  continue
-              seen.add(prefix)
-              try:
-                  ps, ks = listing(prefix)
-              except Exception as e:
-                  print("LIST ERROR", prefix, repr(e))
-                  continue
-              print("PREFIX", prefix, "SUBDIRS", ps[:30], "KEYS", ks[:30])
-              for k in ks:
-                  if k.endswith(target):
-                      print("FOUND_TARGET", k)
-                      raise SystemExit(0)
-              for p in ps:
-                  low = p.lower()
-                  if depth <= 2 or "1951" in low or "grid" in low or "v1" in low or "data" in low:
-                      frontier.append((p, depth + 1))
-
-          print("TARGET NOT FOUND")
-          raise SystemExit(2)
+          of = fsspec.open(url, mode='rb', block_size=8 * 1024 * 1024, cache_type='readahead')
+          with of as fh:
+              with xr.open_dataset(fh, engine='h5netcdf', decode_times=True) as ds:
+                  print(ds)
+                  print('coords', list(ds.coords), 'vars', list(ds.data_vars))
+                  lat_name = next(n for n in ('lat','latitude','y') if n in ds.coords)
+                  lon_name = next(n for n in ('lon','longitude','x') if n in ds.coords)
+                  prcp_name = next(n for n in ('prcp','precip','precipitation') if n in ds.data_vars)
+                  lats = np.asarray(ds[lat_name].values)
+                  lons = np.asarray(ds[lon_name].values)
+                  lat_slice = slice(28.8,31.5) if lats[0] <= lats[-1] else slice(31.5,28.8)
+                  lon_slice = slice(-92.0,-88.2) if lons[0] <= lons[-1] else slice(-88.2,-92.0)
+                  da = ds[prcp_name].sel({lat_name:lat_slice, lon_name:lon_slice}).isel(time=slice(0,2)).load()
+                  arr = np.asarray(da.values)
+                  print('SUBSET shape=', arr.shape, 'finite=', np.isfinite(arr).sum(), 'min=', np.nanmin(arr), 'max=', np.nanmax(arr))
+                  if arr.size == 0 or np.isfinite(arr).sum() == 0:
+                      raise SystemExit('No usable data returned')
           PY
