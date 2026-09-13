@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -61,6 +61,18 @@ jobs:
           fi
           python scripts/build_climatology.py $EXTRA --workers 12
 
+      - name: Build NOAA observation-support climatology
+        id: observation_support
+        if: steps.climatology.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          EXTRA=''
+          if [[ '${{ inputs.rebuild }}' == 'true' ]]; then
+            EXTRA='--rebuild'
+          fi
+          python scripts/build_observation_density.py $EXTRA --workers 12
+
       - name: Commit generated state and climatology
         if: always()
         shell: bash
@@ -69,17 +81,16 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-          # Preserve generated outputs outside the checkout before syncing to the
-          # latest main. This avoids push races and avoids rebase conflicts in
-          # generated files such as docs/data/manifest.json.
           SNAPSHOT="$(mktemp -d)"
           mkdir -p "$SNAPSHOT/docs-data" "$SNAPSHOT/data"
           if [[ -d docs/data ]]; then
             cp -a docs/data/. "$SNAPSHOT/docs-data/"
           fi
-          if [[ -f data/climatology_state.npz ]]; then
-            cp data/climatology_state.npz "$SNAPSHOT/data/climatology_state.npz"
-          fi
+          for state_file in data/climatology_state.npz data/observation_density_state.npz; do
+            if [[ -f "$state_file" ]]; then
+              cp "$state_file" "$SNAPSHOT/data/$(basename "$state_file")"
+            fi
+          done
 
           git fetch origin main
           git reset --hard origin/main
@@ -89,11 +100,13 @@ jobs:
           if [[ -d "$SNAPSHOT/docs-data" ]]; then
             cp -a "$SNAPSHOT/docs-data/." docs/data/
           fi
-          if [[ -f "$SNAPSHOT/data/climatology_state.npz" ]]; then
-            cp "$SNAPSHOT/data/climatology_state.npz" data/climatology_state.npz
-          fi
+          for state_file in climatology_state.npz observation_density_state.npz; do
+            if [[ -f "$SNAPSHOT/data/$state_file" ]]; then
+              cp "$SNAPSHOT/data/$state_file" "data/$state_file"
+            fi
+          done
 
-          git add -A docs/data data/climatology_state.npz 2>/dev/null || true
+          git add -A docs/data data/climatology_state.npz data/observation_density_state.npz 2>/dev/null || true
           if git diff --cached --quiet; then
             echo 'No generated changes to commit.'
           else
@@ -105,6 +118,12 @@ jobs:
         if: steps.climatology.outcome != 'success'
         run: |
           echo 'Climatology build failed. Any safely completed annual state was committed for resume.'
+          exit 1
+
+      - name: Stop if observation-support build failed
+        if: steps.observation_support.outcome != 'success'
+        run: |
+          echo 'Observation-support build failed. Any safely completed annual state was committed for resume.'
           exit 1
 
       - name: Configure GitHub Pages
