@@ -1,9 +1,10 @@
-/* global L */
+/* global L, d3 */
 
 const state = {
   manifest: null,
   mode: 'period',
   displayMode: 'exceedance',
+  mapStyle: 'points',
   selectionId: null,
   data: null,
   comparison: null,
@@ -59,6 +60,7 @@ const canvasRenderer = L.canvas({ padding: 0.5, tolerance: 5 });
 
 const els = {
   displayModeButtons: document.getElementById('displayModeButtons'),
+  mapStyleButtons: document.getElementById('mapStyleButtons'),
   measureHeading: document.getElementById('measureHeading'),
   thresholdButtons: document.getElementById('thresholdButtons'),
   periodSelect: document.getElementById('periodSelect'),
@@ -92,12 +94,23 @@ els.displayModeButtons.addEventListener('click', event => {
   const button = event.target.closest('.mode-button');
   if (!button) return;
   state.displayMode = button.dataset.mode;
-  document.querySelectorAll('.mode-button').forEach(btn => {
+  document.querySelectorAll('#displayModeButtons .mode-button').forEach(btn => {
     const active = btn.dataset.mode === state.displayMode;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
   buildMeasureButtons();
+  render();
+});
+els.mapStyleButtons.addEventListener('click', event => {
+  const button = event.target.closest('.mode-button');
+  if (!button) return;
+  state.mapStyle = button.dataset.style;
+  document.querySelectorAll('#mapStyleButtons .mode-button').forEach(btn => {
+    const active = btn.dataset.style === state.mapStyle;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
   render();
 });
 
@@ -277,10 +290,18 @@ function updateStats(items) {
     const descriptor = measure.kind === 'range' ? `${measure.label} range days` : `${measure.label} exceedance days`;
     els.interpretationText.textContent = `Each pixel shows the change in average ${season} ${descriptor} per year: ${state.comparison.newer.label} minus ${state.comparison.older.label}. Warm colors mean more frequent days; blue means less frequent.`;
   }
+
+  if (state.mapStyle === 'contours') {
+    els.interpretationText.textContent += ' Shaded contours smooth the native ~5-km grid for easier pattern recognition; hover values remain the original grid-cell values.';
+  }
 }
 
 function updateLegend(items) {
   const measure = currentMeasure();
+  const styleNote = state.mapStyle === 'contours'
+    ? ' Shading is a smoothed visualization of the native grid; contour lines mark successive levels.'
+    : '';
+
   if (state.mode === 'period') {
     const rates = items.map(x => x.rate);
     const positive = rates.filter(v => v > 0).sort((a, b) => a - b);
@@ -289,7 +310,7 @@ function updateLegend(items) {
       <div class="legend-title">${measure.label} · days/yr</div>
       <div class="legend-ramp" style="background:linear-gradient(90deg,#18334a,#1f6475,#2a8c82,#67ad6c,#c1c85c,#f2b24f,#ec7845,#d84455,#9e2f68)"></div>
       <div class="legend-labels"><span>0</span><span>${formatShortRate(scaleMax / 2)}</span><span>≥${formatShortRate(scaleMax)}</span></div>
-      <div class="tooltip-small" style="margin-top:6px">Scale capped near the upper tail so local structure remains visible. Hover for exact values.</div>`;
+      <div class="tooltip-small" style="margin-top:6px">Scale capped near the upper tail so local structure remains visible. Hover for exact values.${styleNote}</div>`;
     return scaleMax;
   }
 
@@ -299,18 +320,113 @@ function updateLegend(items) {
     <div class="legend-title">${measure.label} · change in days/yr</div>
     <div class="legend-ramp" style="background:linear-gradient(90deg,#1e3a8a,#2563eb,#93c5fd,#e5e7eb,#fcd34d,#ef4444,#9f1239)"></div>
     <div class="legend-labels"><span>≤−${formatShortRate(scaleMax)}</span><span>0</span><span>≥+${formatShortRate(scaleMax)}</span></div>
-    <div class="tooltip-small" style="margin-top:6px">Newer minus older period. Symmetric scale centered on zero; hover for exact rates and percent change.</div>`;
+    <div class="tooltip-small" style="margin-top:6px">Newer minus older period. Symmetric scale centered on zero; hover for exact rates and percent change.${styleNote}</div>`;
   return scaleMax;
 }
 
-function render() {
-  if (!state.manifest || (!state.data && !state.comparison)) return;
-  if (state.pointLayer) state.pointLayer.remove();
+function buildGrid(items) {
+  const lons = [...new Set(items.map(item => item.point.lon.toFixed(5)))].map(Number).sort((a, b) => a - b);
+  const lats = [...new Set(items.map(item => item.point.lat.toFixed(5)))].map(Number).sort((a, b) => b - a);
+  const lonIndex = new Map(lons.map((v, i) => [v.toFixed(5), i]));
+  const latIndex = new Map(lats.map((v, i) => [v.toFixed(5), i]));
+  const values = new Array(lons.length * lats.length).fill(0);
 
-  const items = renderItems();
-  const scaleMax = updateLegend(items);
-  updateStats(items);
+  for (const item of items) {
+    const x = lonIndex.get(item.point.lon.toFixed(5));
+    const y = latIndex.get(item.point.lat.toFixed(5));
+    if (x === undefined || y === undefined) continue;
+    values[y * lons.length + x] = state.mode === 'period' ? item.rate : item.delta;
+  }
 
+  const dx = lons.length > 1 ? (lons[lons.length - 1] - lons[0]) / (lons.length - 1) : 1 / 24;
+  const dy = lats.length > 1 ? (lats[0] - lats[lats.length - 1]) / (lats.length - 1) : 1 / 24;
+  return { lons, lats, values, nx: lons.length, ny: lats.length, minLon: lons[0], maxLat: lats[0], dx, dy };
+}
+
+function contourToFeature(contour, grid, signedValue) {
+  const coordinates = contour.coordinates.map(polygon => polygon.map(ring => ring.map(([x, y]) => [
+    grid.minLon + (x - 0.5) * grid.dx,
+    grid.maxLat - (y - 0.5) * grid.dy,
+  ])));
+  return {
+    type: 'Feature',
+    properties: { value: signedValue },
+    geometry: { type: 'MultiPolygon', coordinates },
+  };
+}
+
+function addContourSet(layer, grid, values, thresholds, scaleMax, sign = 1) {
+  const contours = d3.contours()
+    .size([grid.nx, grid.ny])
+    .smooth(true)
+    .thresholds(thresholds)(values);
+
+  for (const contour of contours) {
+    const signedValue = contour.value * sign;
+    const feature = contourToFeature(contour, grid, signedValue);
+    const fillColor = state.mode === 'period'
+      ? sequentialColor(signedValue, scaleMax)
+      : comparisonColor(signedValue, scaleMax);
+    L.geoJSON(feature, {
+      interactive: false,
+      style: {
+        className: 'contour-fill',
+        fillColor,
+        fillOpacity: 0.68,
+        color: '#ffffff',
+        opacity: 0.42,
+        weight: 0.8,
+      },
+    }).addTo(layer);
+  }
+}
+
+function addHoverTargets(layer, items) {
+  for (const item of items) {
+    const marker = L.circleMarker([item.point.lat, item.point.lon], {
+      renderer: canvasRenderer,
+      radius: 7,
+      stroke: false,
+      fill: true,
+      fillColor: '#ffffff',
+      fillOpacity: 0.001,
+      bubblingMouseEvents: true,
+    });
+    marker.bindTooltip(() => state.mode === 'period' ? periodTooltipHtml(item.point, item.rate) : comparisonTooltipHtml(item), {
+      className: 'grid-tooltip',
+      direction: 'top',
+      opacity: 0.98,
+      sticky: true,
+    });
+    marker.addTo(layer);
+  }
+}
+
+function renderContours(items, scaleMax) {
+  const layer = L.layerGroup();
+  if (typeof d3 === 'undefined' || !d3.contours) {
+    console.warn('D3 contour library unavailable; falling back to grid points.');
+    return renderPoints(items, scaleMax);
+  }
+
+  const grid = buildGrid(items);
+  if (state.mode === 'period') {
+    const fractions = [0.03, 0.08, 0.16, 0.28, 0.42, 0.58, 0.75, 0.9];
+    const thresholds = fractions.map(f => scaleMax * f).filter(v => v > 0);
+    addContourSet(layer, grid, grid.values, thresholds, scaleMax, 1);
+  } else {
+    const fractions = [0.06, 0.14, 0.28, 0.46, 0.68, 0.9];
+    const thresholds = fractions.map(f => scaleMax * f).filter(v => v > 0);
+    addContourSet(layer, grid, grid.values.map(v => Math.max(0, v)), thresholds, scaleMax, 1);
+    addContourSet(layer, grid, grid.values.map(v => Math.max(0, -v)), thresholds, scaleMax, -1);
+  }
+
+  addHoverTargets(layer, items);
+  layer.addTo(map);
+  return layer;
+}
+
+function renderPoints(items, scaleMax) {
   const layer = L.layerGroup();
   for (const item of items) {
     const value = state.mode === 'period' ? item.rate : item.delta;
@@ -332,7 +448,22 @@ function render() {
     marker.addTo(layer);
   }
   layer.addTo(map);
-  state.pointLayer = layer;
+  return layer;
+}
+
+function render() {
+  if (!state.manifest || (!state.data && !state.comparison)) return;
+  if (state.pointLayer) state.pointLayer.remove();
+
+  const items = renderItems();
+  const scaleMax = updateLegend(items);
+  updateStats(items);
+
+  state.pointLayer = state.mapStyle === 'contours'
+    ? renderContours(items, scaleMax)
+    : renderPoints(items, scaleMax);
+
+  if (state.boundaryLayer?.bringToFront) state.boundaryLayer.bringToFront();
 
   document.querySelectorAll('.threshold-button').forEach((btn, idx) => {
     const activeIndex = state.displayMode === 'range' ? state.rangeIndex : state.thresholdIndex;
