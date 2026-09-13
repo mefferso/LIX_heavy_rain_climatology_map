@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build LIX heavy-rain climatology from NOAA nClimGrid-Daily.
 
-The first run processes 1951 through the latest complete calendar year. A compact
-NPZ state is retained so later annual runs only need to process newly completed
-years. Output JSON is intentionally static so the web map can live on GitHub
-Pages with no server.
+The first run processes 1951 through the latest complete calendar year. Yearly
+threshold counts and annual maxima are retained so arbitrary climatology periods
+and comparison views can be generated later without rereading the full archive.
+Output JSON is static so the web map can live on GitHub Pages with no server.
 
 Data are read from NOAA's public NODD S3 copy using HTTP byte-range requests.
 Only the LIX-area precipitation subset is loaded from each monthly NetCDF file;
@@ -38,6 +38,7 @@ STATE_FILE = STATE_DIR / "climatology_state.npz"
 START_YEAR = 1951
 THRESHOLDS_IN = np.array([1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0], dtype=np.float32)
 THRESHOLDS_MM = THRESHOLDS_IN * 25.4
+STATE_SCHEMA_VERSION = 2
 
 CWA_URL = (
     "https://mapservices.weather.noaa.gov/static/rest/services/"
@@ -83,63 +84,78 @@ def fetch_cwa() -> dict:
 
 
 def period_metadata(end_year: int) -> list[dict]:
+    specs = [
+        ("full", f"{START_YEAR}–{end_year} · full record", START_YEAR, end_year),
+        ("era_2005_2025", "2005–2025", 2005, 2025),
+        ("era_1985_2005", "1985–2005", 1985, 2005),
+        ("era_1965_1985", "1965–1985", 1965, 1985),
+        ("early_1951_1990", "1951–1990", 1951, 1990),
+        ("modern_1991_2025", "1991–2025", 1991, 2025),
+    ]
+    periods = []
+    for period_id, label, start_year, stop_year in specs:
+        if start_year > end_year:
+            continue
+        stop_year = min(stop_year, end_year)
+        if stop_year < start_year:
+            continue
+        periods.append(
+            {
+                "id": period_id,
+                "label": label,
+                "start_year": start_year,
+                "end_year": stop_year,
+                "years": stop_year - start_year + 1,
+                "file": f"data/climatology_{period_id}.json",
+            }
+        )
+    return periods
+
+
+def comparison_metadata() -> list[dict]:
     return [
         {
-            "id": "full",
-            "label": f"{START_YEAR}–{end_year} (full record)",
-            "start_year": START_YEAR,
-            "end_year": end_year,
-            "years": end_year - START_YEAR + 1,
-            "file": "data/climatology_full.json",
+            "id": "modern_vs_early",
+            "label": "1991–2025 minus 1951–1990",
+            "newer_period": "modern_1991_2025",
+            "older_period": "early_1951_1990",
+            "description": "Modern record compared with the earlier 1951–1990 baseline.",
         },
         {
-            "id": "normals",
-            "label": "1991–2020 normals",
-            "start_year": 1991,
-            "end_year": 2020,
-            "years": 30,
-            "file": "data/climatology_normals.json",
+            "id": "latest_vs_mid",
+            "label": "2005–2025 minus 1985–2005",
+            "newer_period": "era_2005_2025",
+            "older_period": "era_1985_2005",
+            "description": "Latest era compared with the preceding era.",
         },
         {
-            "id": "recent",
-            "label": f"2001–{end_year} (recent)",
-            "start_year": 2001,
-            "end_year": end_year,
-            "years": end_year - 2001 + 1,
-            "file": "data/climatology_recent.json",
+            "id": "mid_vs_early",
+            "label": "1985–2005 minus 1965–1985",
+            "newer_period": "era_1985_2005",
+            "older_period": "era_1965_1985",
+            "description": "Middle era compared with the earlier era.",
+        },
+        {
+            "id": "latest_vs_early",
+            "label": "2005–2025 minus 1965–1985",
+            "newer_period": "era_2005_2025",
+            "older_period": "era_1965_1985",
+            "description": "Latest era compared directly with the earliest 21-year era.",
         },
     ]
-
-
-def period_indexes_for_year(year: int) -> list[int]:
-    indexes = [0]
-    if 1991 <= year <= 2020:
-        indexes.append(1)
-    if year >= 2001:
-        indexes.append(2)
-    return indexes
 
 
 def dataset_candidates(year: int, month: int) -> list[str]:
     ym = f"{year}{month:02d}"
-    return [
-        f"ncdd-{ym}-grd-scaled.nc",
-        f"ncdd-{ym}-grd-prelim.nc",
-    ]
+    return [f"ncdd-{ym}-grd-scaled.nc", f"ncdd-{ym}-grd-prelim.nc"]
 
 
 def _read_nodd(
     url: str,
     bbox: tuple[float, float, float, float],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Range-read one monthly NetCDF and load only the LIX precipitation subset."""
     west, south, east, north = bbox
-    remote = fsspec.open(
-        url,
-        mode="rb",
-        block_size=HTTP_BLOCK_SIZE,
-        cache_type="readahead",
-    )
+    remote = fsspec.open(url, mode="rb", block_size=HTTP_BLOCK_SIZE, cache_type="readahead")
     with remote as fh:
         with xr.open_dataset(fh, engine="h5netcdf", decode_times=True) as ds:
             if "prcp" not in ds:
@@ -149,15 +165,10 @@ def _read_nodd(
 
             lat_values = np.asarray(ds["lat"].values)
             lon_values = np.asarray(ds["lon"].values)
-            lat_slice = (
-                slice(south, north) if lat_values[0] <= lat_values[-1] else slice(north, south)
-            )
-            lon_slice = (
-                slice(west, east) if lon_values[0] <= lon_values[-1] else slice(east, west)
-            )
+            lat_slice = slice(south, north) if lat_values[0] <= lat_values[-1] else slice(north, south)
+            lon_slice = slice(west, east) if lon_values[0] <= lon_values[-1] else slice(east, west)
 
-            da = ds["prcp"].sel(lat=lat_slice, lon=lon_slice).transpose("time", "lat", "lon")
-            da = da.load()
+            da = ds["prcp"].sel(lat=lat_slice, lon=lon_slice).transpose("time", "lat", "lon").load()
             if da.size == 0:
                 raise RuntimeError("NODD subset returned no precipitation cells")
 
@@ -168,11 +179,7 @@ def _read_nodd(
             values = np.asarray(da.values, dtype=np.float32)
             lats = np.asarray(da["lat"].values, dtype=np.float64)
             lons = np.asarray(da["lon"].values, dtype=np.float64)
-            dates = (
-                pd.to_datetime(np.asarray(da["time"].values))
-                .strftime("%Y%m%d")
-                .astype(np.int32)
-            )
+            dates = pd.to_datetime(np.asarray(da["time"].values)).strftime("%Y%m%d").astype(np.int32)
 
     return values, lats, lons, dates
 
@@ -188,7 +195,7 @@ def fetch_month(
         for attempt in range(1, 5):
             try:
                 return _read_nodd(url, bbox)
-            except Exception as exc:  # noqa: BLE001 - retry transient cloud/network errors
+            except Exception as exc:  # noqa: BLE001
                 errors.append(f"{filename} attempt {attempt}: {exc}")
                 if attempt < 4:
                     time.sleep(min(8, 2 ** (attempt - 1)))
@@ -209,7 +216,9 @@ def initialize_state(
         raise RuntimeError("No nClimGrid points were found inside the LIX CWA")
 
     npoints = rows.size
+    nyears = end_year - START_YEAR + 1
     return {
+        "schema_version": STATE_SCHEMA_VERSION,
         "last_year": START_YEAR - 1,
         "thresholds_in": THRESHOLDS_IN.copy(),
         "grid_lats": grid_lats.copy(),
@@ -218,17 +227,38 @@ def initialize_state(
         "cols": cols.astype(np.int16),
         "point_lats": grid_lats[rows].astype(np.float32),
         "point_lons": grid_lons[cols].astype(np.float32),
-        "counts": np.zeros((3, len(THRESHOLDS_IN), 12, npoints), dtype=np.uint16),
-        "max_mm": np.full((3, npoints), -np.inf, dtype=np.float32),
-        "max_date": np.zeros((3, npoints), dtype=np.int32),
-        "target_end_year": end_year,
+        "yearly_counts": np.zeros((nyears, len(THRESHOLDS_IN), 12, npoints), dtype=np.uint16),
+        "yearly_max_mm": np.full((nyears, npoints), -np.inf, dtype=np.float32),
+        "yearly_max_date": np.zeros((nyears, npoints), dtype=np.int32),
     }
+
+
+def expand_state_to_year(state: dict, end_year: int) -> None:
+    wanted = end_year - START_YEAR + 1
+    current = state["yearly_counts"].shape[0]
+    if wanted <= current:
+        return
+    add = wanted - current
+    npoints = len(state["point_lats"])
+    state["yearly_counts"] = np.concatenate(
+        [state["yearly_counts"], np.zeros((add, len(THRESHOLDS_IN), 12, npoints), dtype=np.uint16)],
+        axis=0,
+    )
+    state["yearly_max_mm"] = np.concatenate(
+        [state["yearly_max_mm"], np.full((add, npoints), -np.inf, dtype=np.float32)], axis=0
+    )
+    state["yearly_max_date"] = np.concatenate(
+        [state["yearly_max_date"], np.zeros((add, npoints), dtype=np.int32)], axis=0
+    )
 
 
 def load_state(end_year: int, rebuild: bool) -> dict | None:
     if rebuild or not STATE_FILE.exists():
         return None
     with np.load(STATE_FILE, allow_pickle=False) as z:
+        if "schema_version" not in z or int(z["schema_version"]) != STATE_SCHEMA_VERSION:
+            print("Saved state uses the old aggregate schema; rebuilding yearly state from 1951.", flush=True)
+            return None
         saved_thresholds = z["thresholds_in"]
         last_year = int(z["last_year"])
         if not np.array_equal(saved_thresholds, THRESHOLDS_IN):
@@ -237,7 +267,8 @@ def load_state(end_year: int, rebuild: bool) -> dict | None:
         if last_year > end_year:
             print("Saved state extends beyond requested end year; rebuilding.", flush=True)
             return None
-        return {
+        state = {
+            "schema_version": int(z["schema_version"]),
             "last_year": last_year,
             "thresholds_in": saved_thresholds.copy(),
             "grid_lats": z["grid_lats"].copy(),
@@ -246,17 +277,19 @@ def load_state(end_year: int, rebuild: bool) -> dict | None:
             "cols": z["cols"].copy(),
             "point_lats": z["point_lats"].copy(),
             "point_lons": z["point_lons"].copy(),
-            "counts": z["counts"].copy(),
-            "max_mm": z["max_mm"].copy(),
-            "max_date": z["max_date"].copy(),
-            "target_end_year": end_year,
+            "yearly_counts": z["yearly_counts"].copy(),
+            "yearly_max_mm": z["yearly_max_mm"].copy(),
+            "yearly_max_date": z["yearly_max_date"].copy(),
         }
+    expand_state_to_year(state, end_year)
+    return state
 
 
 def save_state(state: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         STATE_FILE,
+        schema_version=np.int16(STATE_SCHEMA_VERSION),
         last_year=np.int32(state["last_year"]),
         thresholds_in=state["thresholds_in"],
         grid_lats=state["grid_lats"],
@@ -265,9 +298,9 @@ def save_state(state: dict) -> None:
         cols=state["cols"],
         point_lats=state["point_lats"],
         point_lons=state["point_lons"],
-        counts=state["counts"],
-        max_mm=state["max_mm"],
-        max_date=state["max_date"],
+        yearly_counts=state["yearly_counts"],
+        yearly_max_mm=state["yearly_max_mm"],
+        yearly_max_date=state["yearly_max_date"],
     )
 
 
@@ -280,8 +313,8 @@ def process_month_data(
     values, lats, lons, dates = data
     if values.shape[1:] != (len(state["grid_lats"]), len(state["grid_lons"])):
         raise RuntimeError(
-            f"Grid shape changed in {year}-{month:02d}: "
-            f"{values.shape[1:]} != {(len(state['grid_lats']), len(state['grid_lons']))}"
+            f"Grid shape changed in {year}-{month:02d}: {values.shape[1:]} != "
+            f"{(len(state['grid_lats']), len(state['grid_lons']))}"
         )
     if not np.allclose(lats, state["grid_lats"], atol=1e-6) or not np.allclose(
         lons, state["grid_lons"], atol=1e-6
@@ -290,22 +323,21 @@ def process_month_data(
 
     selected = values[:, state["rows"], state["cols"]]
     selected_safe = np.where(np.isfinite(selected), selected, -np.inf)
+    year_index = year - START_YEAR
 
     threshold_counts = np.stack(
         [np.count_nonzero(selected >= threshold_mm, axis=0) for threshold_mm in THRESHOLDS_MM],
         axis=0,
     ).astype(np.uint16)
+    state["yearly_counts"][year_index, :, month - 1, :] = threshold_counts
 
     max_indices = np.argmax(selected_safe, axis=0)
     point_index = np.arange(selected_safe.shape[1])
     month_max = selected_safe[max_indices, point_index]
     month_dates = dates[max_indices]
-
-    for period_index in period_indexes_for_year(year):
-        state["counts"][period_index, :, month - 1, :] += threshold_counts
-        update = month_max > state["max_mm"][period_index]
-        state["max_mm"][period_index, update] = month_max[update]
-        state["max_date"][period_index, update] = month_dates[update]
+    update = month_max > state["yearly_max_mm"][year_index]
+    state["yearly_max_mm"][year_index, update] = month_max[update]
+    state["yearly_max_date"][year_index, update] = month_dates[update]
 
 
 def process_jobs(
@@ -318,36 +350,41 @@ def process_jobs(
     total = len(jobs)
     if total == 0:
         return
-
     print(f"Processing {total} NOAA NODD monthly subsets with {workers} workers.", flush=True)
     failures: list[str] = []
     completed = 0
-
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         futures = {executor.submit(fetch_month, y, m, bbox): (y, m) for y, m in jobs}
         for future in as_completed(futures):
             year, month = futures[future]
             try:
-                data = future.result()
-                process_month_data(data, year, month, state)
+                process_month_data(future.result(), year, month, state)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{year}-{month:02d}: {exc}")
             completed += 1
             if completed % 6 == 0 or completed == total:
                 print(f"  {completed}/{total} months complete", flush=True)
-
     if failures:
-        raise RuntimeError(
-            f"{len(failures)} monthly NODD reads failed:\n" + "\n".join(failures[:30])
-        )
+        raise RuntimeError(f"{len(failures)} monthly NODD reads failed:\n" + "\n".join(failures[:30]))
 
 
-def write_period_json(state: dict, meta: dict, period_index: int) -> None:
+def aggregate_period(state: dict, meta: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    start_idx = meta["start_year"] - START_YEAR
+    end_idx = meta["end_year"] - START_YEAR + 1
+    counts = state["yearly_counts"][start_idx:end_idx].sum(axis=0, dtype=np.uint32)
+
+    maxima = state["yearly_max_mm"][start_idx:end_idx]
+    dates = state["yearly_max_date"][start_idx:end_idx]
+    best_year_idx = np.argmax(maxima, axis=0)
+    point_idx = np.arange(maxima.shape[1])
+    max_mm = maxima[best_year_idx, point_idx]
+    max_date = dates[best_year_idx, point_idx]
+    return counts, max_mm, max_date
+
+
+def write_period_json(state: dict, meta: dict) -> None:
+    counts, max_mm, max_date = aggregate_period(state, meta)
     points = []
-    counts = state["counts"][period_index]
-    max_mm = state["max_mm"][period_index]
-    max_date = state["max_date"][period_index]
-
     for i in range(len(state["point_lats"])):
         points.append(
             {
@@ -358,7 +395,6 @@ def write_period_json(state: dict, meta: dict, period_index: int) -> None:
                 "md": int(max_date[i]) if max_date[i] else None,
             }
         )
-
     payload = {
         "period": {k: meta[k] for k in ("id", "label", "start_year", "end_year", "years")},
         "thresholds_in": THRESHOLDS_IN.astype(float).tolist(),
@@ -366,10 +402,7 @@ def write_period_json(state: dict, meta: dict, period_index: int) -> None:
     }
     output = DOCS_DATA / Path(meta["file"]).name
     output.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    print(
-        f"Wrote {output.relative_to(ROOT)} ({output.stat().st_size / 1_000_000:.1f} MB)",
-        flush=True,
-    )
+    print(f"Wrote {output.relative_to(ROOT)} ({output.stat().st_size / 1_000_000:.1f} MB)", flush=True)
 
 
 def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
@@ -377,10 +410,13 @@ def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
     (DOCS_DATA / "lix_cwa.geojson").write_text(
         json.dumps(cwa_geojson, separators=(",", ":")), encoding="utf-8"
     )
-
     periods = period_metadata(end_year)
-    for idx, meta in enumerate(periods):
-        write_period_json(state, meta, idx)
+    keep_files = {Path(meta["file"]).name for meta in periods}
+    for old_file in DOCS_DATA.glob("climatology_*.json"):
+        if old_file.name not in keep_files:
+            old_file.unlink()
+    for meta in periods:
+        write_period_json(state, meta)
 
     manifest = {
         "status": "ready",
@@ -390,7 +426,12 @@ def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
         "grid_resolution_deg": 1 / 24,
         "thresholds_in": THRESHOLDS_IN.astype(float).tolist(),
         "periods": periods,
+        "comparisons": comparison_metadata(),
         "cwa_file": "data/lix_cwa.geojson",
+        "era_note": (
+            "The 2005–2025, 1985–2005, and 1965–1985 era labels are inclusive; "
+            "adjacent eras therefore share the boundary year exactly as requested."
+        ),
         "daily_period_note": (
             "These are nClimGrid-Daily fixed daily precipitation analyses derived from "
             "GHCN-Daily station observations, not arbitrary rolling 24-hour maxima."
@@ -401,8 +442,8 @@ def write_outputs(state: dict, cwa_geojson: dict, end_year: int) -> None:
 
 def main() -> None:
     args = parse_args()
-    if args.end_year < 2001:
-        raise SystemExit("end-year must be 2001 or later for the configured recent-period view")
+    if args.end_year < 2025:
+        raise SystemExit("end-year must be 2025 or later for the configured era comparisons")
 
     DOCS_DATA.mkdir(parents=True, exist_ok=True)
     cwa_geojson = fetch_cwa()
@@ -417,10 +458,10 @@ def main() -> None:
         first = fetch_month(START_YEAR, 1, bbox)
         state = initialize_state(first[1], first[2], cwa_geometry, args.end_year)
         process_month_data(first, START_YEAR, 1, state)
-        first_year_month = 2
         first_year = START_YEAR
+        first_year_month = 2
     else:
-        print(f"Loaded aggregation state through {state['last_year']}.", flush=True)
+        print(f"Loaded yearly aggregation state through {state['last_year']}.", flush=True)
         first_year = state["last_year"] + 1
         first_year_month = 1
 
@@ -430,13 +471,10 @@ def main() -> None:
         process_jobs(state, bbox, jobs, args.workers)
         state["last_year"] = year
         save_state(state)
-        print(f"Saved aggregation state through {year}.", flush=True)
+        print(f"Saved yearly aggregation state through {year}.", flush=True)
 
-    # A loaded state may already be current, in which case no yearly loop runs.
     if state["last_year"] < args.end_year:
-        raise RuntimeError(
-            f"Aggregation stopped at {state['last_year']} but end year is {args.end_year}"
-        )
+        raise RuntimeError(f"Aggregation stopped at {state['last_year']} but end year is {args.end_year}")
 
     save_state(state)
     write_outputs(state, cwa_geojson, args.end_year)
