@@ -157,7 +157,7 @@ def fetch_month(
         "horizStride": "1",
         "time": "all",
         "addLatLon": "true",
-        "accept": "netcdf4",
+        "accept": "netCDF4",
     }
     errors: list[str] = []
     for attempt in range(1, 5):
