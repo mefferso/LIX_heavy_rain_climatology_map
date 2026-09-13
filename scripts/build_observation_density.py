@@ -16,7 +16,6 @@ for the static GitHub Pages map.
 from __future__ import annotations
 
 import argparse
-import calendar
 import io
 import json
 import os
@@ -142,8 +141,13 @@ def fetch_month(
     month: int,
     bbox: tuple[float, float, float, float],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fetch all days in one monthly auxiliary file for only the LIX-area grid.
+
+    Each ncddsupp file already contains exactly one calendar month. Asking NCSS
+    for an explicit start/end range caused HTTP 400 responses on NCEI's TDS for
+    these files, so request the file's complete time axis with ``time=all``.
+    """
     west, south, east, north = bbox
-    last_day = calendar.monthrange(year, month)[1]
     params = {
         "var": "cntp",
         "north": f"{north:.5f}",
@@ -151,9 +155,8 @@ def fetch_month(
         "west": f"{west:.5f}",
         "east": f"{east:.5f}",
         "horizStride": "1",
-        "time_start": f"{year}-{month:02d}-01T00:00:00Z",
-        "time_end": f"{year}-{month:02d}-{last_day:02d}T23:59:59Z",
-        "timeStride": "1",
+        "time": "all",
+        "addLatLon": "true",
         "accept": "netcdf4",
     }
     errors: list[str] = []
@@ -165,7 +168,9 @@ def fetch_month(
                 headers={"User-Agent": USER_AGENT},
                 timeout=120,
             )
-            response.raise_for_status()
+            if not response.ok:
+                detail = response.text[:500].replace("\n", " ").strip()
+                raise RuntimeError(f"HTTP {response.status_code}: {detail or response.reason}")
             with xr.open_dataset(io.BytesIO(response.content), engine="h5netcdf", decode_times=False) as ds:
                 if "cntp" not in ds:
                     raise RuntimeError("auxiliary subset does not contain cntp")
