@@ -1,49 +1,42 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Interactive heavy-rain climatology for the NWS New Orleans/Baton Rouge forecast area." />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LIX Heavy-Rain Climatology</title>
-  <link rel="preconnect" href="https://unpkg.com" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="site-header">
     <div>
-      <div class="eyebrow">NWS New Orleans / Baton Rouge · LIX</div>
+      <p class="eyebrow">NWS New Orleans/Baton Rouge · LIX</p>
       <h1>Heavy-Rain Climatology</h1>
-      <p>How often does a location get a really big 24-hour rain and how has that frequency changed?</p>
+      <p class="subtitle">How often does a 24-hour grid-cell precipitation total reach a heavy-rain threshold?</p>
     </div>
-    <button id="aboutBtn" class="ghost-button" type="button">Methodology</button>
+    <button id="aboutBtn" type="button" class="about-button">About</button>
   </header>
 
-  <main class="layout">
-    <aside class="panel controls" aria-label="Map controls">
+  <main class="page-shell">
+    <aside class="controls-panel">
       <section class="control-row">
-        <label>Display mode</label>
-        <div id="displayModeButtons" class="display-mode-toggle" role="group" aria-label="Display mode">
-          <button type="button" class="mode-button active" data-mode="exceedance" aria-pressed="true">Exceedance thresholds</button>
-          <button type="button" class="mode-button" data-mode="range" aria-pressed="false">Rainfall ranges</button>
+        <label>Measure</label>
+        <div id="displayModeButtons" class="mode-buttons" role="group" aria-label="Display measure">
+          <button type="button" class="mode-button active" data-mode="exceedance" aria-pressed="true">At least</button>
+          <button type="button" class="mode-button" data-mode="range" aria-pressed="false">Ranges</button>
         </div>
       </section>
 
       <section class="control-row">
-        <label>Map style</label>
-        <div id="mapStyleButtons" class="display-mode-toggle map-style-toggle" role="group" aria-label="Map style">
-          <button type="button" class="mode-button active" data-style="points" aria-pressed="true">Grid points</button>
-          <button type="button" class="mode-button" data-style="contours" aria-pressed="false">Shaded contours</button>
-        </div>
+        <label id="measureHeading">Threshold</label>
+        <div id="thresholdButtons" class="threshold-buttons" role="group" aria-label="Rainfall threshold"></div>
       </section>
 
-      <section>
-        <h2 id="measureHeading">Threshold</h2>
-        <div id="thresholdButtons" class="threshold-grid" role="group" aria-label="Rainfall threshold"></div>
-      </section>
-
-      <section class="control-row period-control">
-        <label for="periodSelect">Climatology / comparison</label>
+      <section class="control-row">
+        <label for="periodSelect">Period</label>
         <select id="periodSelect"></select>
       </section>
 
@@ -51,78 +44,70 @@
         <label for="seasonSelect">Season</label>
         <select id="seasonSelect">
           <option value="annual">Annual</option>
-          <option value="djf">Winter (Dec–Feb)</option>
-          <option value="mam">Spring (Mar–May)</option>
-          <option value="jja">Summer (Jun–Aug)</option>
-          <option value="son">Fall (Sep–Nov)</option>
+          <option value="djf">Winter · Dec–Feb</option>
+          <option value="mam">Spring · Mar–May</option>
+          <option value="jja">Summer · Jun–Aug</option>
+          <option value="son">Fall · Sep–Nov</option>
         </select>
       </section>
 
-      <section class="metric-card" aria-live="polite">
-        <div id="medianLabel" class="metric-label">CWA median</div>
-        <div id="medianMetric" class="metric-value">—</div>
-        <div id="medianDetail" class="metric-sub">Loading climatology…</div>
+      <section class="control-row">
+        <label>Map style</label>
+        <div id="mapStyleButtons" class="mode-buttons" role="group" aria-label="Map style">
+          <button type="button" class="mode-button active" data-style="points" aria-pressed="true">Grid</button>
+          <button type="button" class="mode-button" data-style="contours" aria-pressed="false">Contours</button>
+        </div>
       </section>
 
-      <section class="mini-stats">
-        <div>
-          <span id="maxLabel">Wettest grid</span>
+      <section class="stats-card">
+        <div class="stat">
+          <span id="medianLabel" class="stat-label">CWA median</span>
+          <strong id="medianMetric">—</strong>
+          <span id="medianDetail" class="stat-detail">—</span>
+        </div>
+        <div class="stat">
+          <span id="maxLabel" class="stat-label">Wettest grid</span>
           <strong id="maxMetric">—</strong>
         </div>
-        <div>
-          <span id="p90Label">90th percentile</span>
+        <div class="stat">
+          <span id="p90Label" class="stat-label">90th percentile</span>
           <strong id="p90Metric">—</strong>
         </div>
-        <div>
-          <span>Grid points</span>
+        <div class="stat">
+          <span class="stat-label">Grid points</span>
           <strong id="pointMetric">—</strong>
         </div>
       </section>
 
-      <section class="interpretation">
-        <h2>Read it this way</h2>
-        <p id="interpretationText">Choose a threshold and period to map exceedance frequency.</p>
+      <section class="interpretation-card">
+        <h2>What the map shows</h2>
+        <p id="interpretationText">Loading…</p>
       </section>
+
+      <div id="status" class="status">Loading climatology…</div>
     </aside>
 
-    <section class="map-wrap" aria-label="Heavy rain climatology map">
+    <section class="map-panel" aria-label="Heavy-rain climatology map">
       <div id="map"></div>
-      <div id="status" class="status-pill">Loading NOAA climatology…</div>
-      <div id="legend" class="legend"></div>
+      <div id="legend" class="map-legend"></div>
     </section>
   </main>
 
-  <section class="source-strip">
-    <strong>Source:</strong> NOAA/NCEI nClimGrid-Daily v1.0.0 · ~5-km grid · 1951–present. Optional observation-support overlay uses the companion nClimGrid-Daily-Auxiliary precipitation observation-count product. Values are fixed daily 24-hour totals ending in the early morning, not arbitrary rolling 24-hour windows.
-  </section>
-
   <dialog id="aboutDialog">
-    <form method="dialog" class="dialog-card">
-      <div class="dialog-header">
-        <div>
-          <div class="eyebrow">How this map is built</div>
-          <h2>Methodology & caveats</h2>
-        </div>
-        <button class="close-button" aria-label="Close" value="cancel">×</button>
-      </div>
-      <p>The analysis counts nClimGrid-Daily grid-cell days meeting each precipitation threshold, then divides by the number of complete years in the selected climatological period. Seasonal views use the same method for the selected calendar months.</p>
-      <p><strong>Display mode:</strong> Exceedance thresholds show days meeting or exceeding a selected amount. Rainfall ranges show mutually exclusive daily-total bins derived from those cumulative thresholds (for example, 1–&lt;2 inches equals the ≥1-inch count minus the ≥2-inch count).</p>
-      <p><strong>Map style:</strong> Grid points display the native ~5-km grid centers directly. Shaded contours create a smoothed visual surface from those same grid-cell values and draw contour lines on top. The contour view is for seeing broad spatial structure; hover values still come from the original grid cells.</p>
-      <p><strong>Observation support:</strong> The optional colored-ring overlay comes from NOAA/NCEI's companion nClimGrid-Daily-Auxiliary product. It shows the mean daily number of precipitation input observations within 30 miles of each grid point for the selected period and season. Higher values indicate denser nearby observational support. This helps identify areas where station sparsity may add uncertainty, but it is not a formal confidence score; local rainfall gradients, observation timing, terrain, and interpolation also matter.</p>
-      <p><strong>Comparison maps show the change in days per year:</strong> newer period minus older period. Positive values mean days in the selected threshold/range became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero. With observation support enabled, comparison rings conservatively use the lower-support value of the two periods.</p>
-      <p>The era slices are <strong>2005–2025, 1985–2005, and 1965–1985</strong>. Those labels are inclusive, so adjacent eras intentionally share the boundary year exactly as specified.</p>
-      <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent spatial patterns are more trustworthy than one isolated pixel.</p>
-      <p>The map intentionally uses complete calendar years only, avoiding a partial current year in the climatology.</p>
-      <div class="dialog-actions">
-        <a href="https://www.ncei.noaa.gov/products/land-based-station/nclimgrid-daily" target="_blank" rel="noreferrer">NOAA dataset documentation ↗</a>
-        <button value="cancel">Close</button>
-      </div>
+    <form method="dialog">
+      <button class="dialog-close" aria-label="Close">×</button>
+      <h2>About this climatology</h2>
+      <p>This map uses NOAA/NCEI nClimGrid-Daily precipitation analyses on the native ~5-km grid. Values represent grid-cell analyses rather than individual rain-gauge measurements.</p>
+      <p>Frequency is calculated as the average number of days per year meeting the selected threshold or rainfall range. Seasonal selections use the same annualized denominator, so the value answers “how many days in this season per year?”</p>
+      <p>The underlying analysis is interpolated from station observations. Individual pixels should not be interpreted as exact local rainfall maxima; broader spatial patterns are more robust.</p>
+      <p>Comparison views show the newer climatological period minus the older period at each grid point.</p>
+      <p>Observation support, when enabled, uses NOAA/NCEI nClimGrid-Daily-Auxiliary precipitation-observation counts within 30 miles of each grid point. It is an indicator of station-density support, not a formal confidence score.</p>
+      <p>Source: NOAA/NCEI nClimGrid-Daily and nClimGrid-Daily-Auxiliary.</p>
     </form>
   </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="app.js"></script>
-  <script src="density.js"></script>
 </body>
 </html>
