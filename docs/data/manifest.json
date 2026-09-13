@@ -1,44 +1,12 @@
 {
-  "status": "ready",
+  "status": "building",
   "generated_utc": "2026-09-13T11:30:27.456099+00:00",
   "source": "NOAA/NCEI nClimGrid-Daily v1.0.0 via NOAA Open Data Dissemination",
   "source_url": "https://registry.opendata.aws/noaa-nclimgrid-daily/",
   "grid_resolution_deg": 0.041666666666666664,
-  "thresholds_in": [
-    1.0,
-    2.0,
-    3.0,
-    5.0,
-    8.0,
-    10.0,
-    12.0
-  ],
-  "periods": [
-    {
-      "id": "full",
-      "label": "1951\u20132025 (full record)",
-      "start_year": 1951,
-      "end_year": 2025,
-      "years": 75,
-      "file": "data/climatology_full.json"
-    },
-    {
-      "id": "normals",
-      "label": "1991\u20132020 normals",
-      "start_year": 1991,
-      "end_year": 2020,
-      "years": 30,
-      "file": "data/climatology_normals.json"
-    },
-    {
-      "id": "recent",
-      "label": "2001\u20132025 (recent)",
-      "start_year": 2001,
-      "end_year": 2025,
-      "years": 25,
-      "file": "data/climatology_recent.json"
-    }
-  ],
+  "thresholds_in": [1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0],
+  "periods": [],
+  "comparisons": [],
   "cwa_file": "data/lix_cwa.geojson",
-  "daily_period_note": "These are nClimGrid-Daily fixed daily precipitation analyses derived from GHCN-Daily station observations, not arbitrary rolling 24-hour maxima."
+  "daily_period_note": "Rebuilding yearly climatology state and era comparison products."
 }
