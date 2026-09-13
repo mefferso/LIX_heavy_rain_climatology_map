@@ -14,7 +14,7 @@
     <div>
       <div class="eyebrow">NWS New Orleans / Baton Rouge · LIX</div>
       <h1>Heavy-Rain Climatology</h1>
-      <p>How often does a location get a really big 24-hour rain?</p>
+      <p>How often does a location get a really big 24-hour rain — and how has that frequency changed?</p>
     </div>
     <button id="aboutBtn" class="ghost-button" type="button">Methodology</button>
   </header>
@@ -27,7 +27,7 @@
       </section>
 
       <section class="control-row">
-        <label for="periodSelect">Climatology period</label>
+        <label for="periodSelect">Climatology / comparison</label>
         <select id="periodSelect"></select>
       </section>
 
@@ -43,18 +43,18 @@
       </section>
 
       <section class="metric-card" aria-live="polite">
-        <div class="metric-label">CWA median</div>
+        <div id="medianLabel" class="metric-label">CWA median</div>
         <div id="medianMetric" class="metric-value">—</div>
         <div id="medianDetail" class="metric-sub">Loading climatology…</div>
       </section>
 
       <section class="mini-stats">
         <div>
-          <span>Wettest grid</span>
+          <span id="maxLabel">Wettest grid</span>
           <strong id="maxMetric">—</strong>
         </div>
         <div>
-          <span>90th percentile</span>
+          <span id="p90Label">90th percentile</span>
           <strong id="p90Metric">—</strong>
         </div>
         <div>
@@ -65,7 +65,7 @@
 
       <section class="interpretation">
         <h2>Read it this way</h2>
-        <p id="interpretationText">Choose a threshold to map the average number of exceedance days per year.</p>
+        <p id="interpretationText">Choose a threshold and period to map exceedance frequency.</p>
       </section>
     </aside>
 
@@ -74,18 +74,6 @@
       <div id="status" class="status-pill">Loading NOAA climatology…</div>
       <div id="legend" class="legend"></div>
     </section>
-
-    <aside class="panel hotspots" aria-label="Local rainfall hot spots">
-      <div class="panel-heading">
-        <div>
-          <div class="eyebrow">Spatially separated maxima</div>
-          <h2>Local hot spots</h2>
-        </div>
-        <span class="badge">≥15 mi apart</span>
-      </div>
-      <p class="muted">Nearby top-ranked pixels are suppressed so one wet pocket does not fill the whole list.</p>
-      <div id="hotspotList" class="hotspot-list"></div>
-    </aside>
   </main>
 
   <section class="source-strip">
@@ -102,9 +90,10 @@
         <button class="close-button" aria-label="Close" value="cancel">×</button>
       </div>
       <p>The analysis counts nClimGrid-Daily grid-cell days meeting each precipitation threshold, then divides by the number of complete years in the selected climatological period. Seasonal views use the same method for the selected calendar months.</p>
-      <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI specifically notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent maxima are more trustworthy than one isolated pixel.</p>
-      <p>The “local hot spots” list ranks the selected frequency field while requiring at least 15 miles between listed points. It is a simple spatial-separation filter, not a formal statistical cluster analysis.</p>
-      <p>The map intentionally uses the latest <strong>complete calendar year</strong>, avoiding a partial current year in the climatology.</p>
+      <p><strong>Comparison maps show the change in exceedance days per year:</strong> newer period minus older period. Positive values mean heavy-rain days became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero.</p>
+      <p>The era slices are <strong>2005–2025, 1985–2005, and 1965–1985</strong>. Those labels are inclusive, so adjacent eras intentionally share the boundary year exactly as specified.</p>
+      <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent spatial patterns are more trustworthy than one isolated pixel.</p>
+      <p>The map intentionally uses complete calendar years only, avoiding a partial current year in the climatology.</p>
       <div class="dialog-actions">
         <a href="https://www.ncei.noaa.gov/products/land-based-station/nclimgrid-daily" target="_blank" rel="noreferrer">NOAA dataset documentation ↗</a>
         <button value="cancel">Close</button>
