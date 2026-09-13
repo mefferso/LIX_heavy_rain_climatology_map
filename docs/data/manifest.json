@@ -1,12 +1,99 @@
 {
-  "status": "building",
-  "generated_utc": "2026-09-13T11:30:27.456099+00:00",
+  "status": "ready",
+  "generated_utc": "2026-09-13T13:03:18.842256+00:00",
   "source": "NOAA/NCEI nClimGrid-Daily v1.0.0 via NOAA Open Data Dissemination",
   "source_url": "https://registry.opendata.aws/noaa-nclimgrid-daily/",
   "grid_resolution_deg": 0.041666666666666664,
-  "thresholds_in": [1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0],
-  "periods": [],
-  "comparisons": [],
+  "thresholds_in": [
+    1.0,
+    2.0,
+    3.0,
+    5.0,
+    8.0,
+    10.0,
+    12.0
+  ],
+  "periods": [
+    {
+      "id": "full",
+      "label": "1951\u20132025 \u00b7 full record",
+      "start_year": 1951,
+      "end_year": 2025,
+      "years": 75,
+      "file": "data/climatology_full.json"
+    },
+    {
+      "id": "era_2005_2025",
+      "label": "2005\u20132025",
+      "start_year": 2005,
+      "end_year": 2025,
+      "years": 21,
+      "file": "data/climatology_era_2005_2025.json"
+    },
+    {
+      "id": "era_1985_2005",
+      "label": "1985\u20132005",
+      "start_year": 1985,
+      "end_year": 2005,
+      "years": 21,
+      "file": "data/climatology_era_1985_2005.json"
+    },
+    {
+      "id": "era_1965_1985",
+      "label": "1965\u20131985",
+      "start_year": 1965,
+      "end_year": 1985,
+      "years": 21,
+      "file": "data/climatology_era_1965_1985.json"
+    },
+    {
+      "id": "early_1951_1990",
+      "label": "1951\u20131990",
+      "start_year": 1951,
+      "end_year": 1990,
+      "years": 40,
+      "file": "data/climatology_early_1951_1990.json"
+    },
+    {
+      "id": "modern_1991_2025",
+      "label": "1991\u20132025",
+      "start_year": 1991,
+      "end_year": 2025,
+      "years": 35,
+      "file": "data/climatology_modern_1991_2025.json"
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "modern_vs_early",
+      "label": "1991\u20132025 minus 1951\u20131990",
+      "newer_period": "modern_1991_2025",
+      "older_period": "early_1951_1990",
+      "description": "Modern record compared with the earlier 1951\u20131990 baseline."
+    },
+    {
+      "id": "latest_vs_mid",
+      "label": "2005\u20132025 minus 1985\u20132005",
+      "newer_period": "era_2005_2025",
+      "older_period": "era_1985_2005",
+      "description": "Latest era compared with the preceding era."
+    },
+    {
+      "id": "mid_vs_early",
+      "label": "1985\u20132005 minus 1965\u20131985",
+      "newer_period": "era_1985_2005",
+      "older_period": "era_1965_1985",
+      "description": "Middle era compared with the earlier era."
+    },
+    {
+      "id": "latest_vs_early",
+      "label": "2005\u20132025 minus 1965\u20131985",
+      "newer_period": "era_2005_2025",
+      "older_period": "era_1965_1985",
+      "description": "Latest era compared directly with the earliest 21-year era."
+    }
+  ],
   "cwa_file": "data/lix_cwa.geojson",
-  "daily_period_note": "Rebuilding yearly climatology state and era comparison products."
+  "era_note": "The 2005\u20132025, 1985\u20132005, and 1965\u20131985 era labels are inclusive; adjacent eras therefore share the boundary year exactly as requested.",
+  "daily_period_note": "These are nClimGrid-Daily fixed daily precipitation analyses derived from GHCN-Daily station observations, not arbitrary rolling 24-hour maxima."
 }
