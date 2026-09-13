@@ -21,12 +21,20 @@
 
   <main class="layout">
     <aside class="panel controls" aria-label="Map controls">
+      <section class="control-row">
+        <label>Display mode</label>
+        <div id="displayModeButtons" class="display-mode-toggle" role="group" aria-label="Display mode">
+          <button type="button" class="mode-button active" data-mode="exceedance" aria-pressed="true">Exceedance thresholds</button>
+          <button type="button" class="mode-button" data-mode="range" aria-pressed="false">Rainfall ranges</button>
+        </div>
+      </section>
+
       <section>
-        <h2>Threshold</h2>
+        <h2 id="measureHeading">Threshold</h2>
         <div id="thresholdButtons" class="threshold-grid" role="group" aria-label="Rainfall threshold"></div>
       </section>
 
-      <section class="control-row">
+      <section class="control-row period-control">
         <label for="periodSelect">Climatology / comparison</label>
         <select id="periodSelect"></select>
       </section>
@@ -90,7 +98,8 @@
         <button class="close-button" aria-label="Close" value="cancel">×</button>
       </div>
       <p>The analysis counts nClimGrid-Daily grid-cell days meeting each precipitation threshold, then divides by the number of complete years in the selected climatological period. Seasonal views use the same method for the selected calendar months.</p>
-      <p><strong>Comparison maps show the change in exceedance days per year:</strong> newer period minus older period. Positive values mean heavy-rain days became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero.</p>
+      <p><strong>Display mode:</strong> Exceedance thresholds show days meeting or exceeding a selected amount. Rainfall ranges show mutually exclusive daily-total bins derived from those cumulative thresholds (for example, 1–&lt;2 inches equals the ≥1-inch count minus the ≥2-inch count).</p>
+      <p><strong>Comparison maps show the change in days per year:</strong> newer period minus older period. Positive values mean days in the selected threshold/range became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero.</p>
       <p>The era slices are <strong>2005–2025, 1985–2005, and 1965–1985</strong>. Those labels are inclusive, so adjacent eras intentionally share the boundary year exactly as specified.</p>
       <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent spatial patterns are more trustworthy than one isolated pixel.</p>
       <p>The map intentionally uses complete calendar years only, avoiding a partial current year in the climatology.</p>
