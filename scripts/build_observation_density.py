@@ -35,6 +35,7 @@ START_YEAR = 1951
 STATE_SCHEMA_VERSION = 1
 USER_AGENT = "LIX-heavy-rain-climatology/1.0 (NOAA climate analysis; GitHub Pages)"
 AUX_NCSS_ROOT = "https://www.ncei.noaa.gov/thredds/ncss/grid/nclimgrid-daily-auxiliary"
+GRID_MATCH_TOLERANCE_DEG = 0.005
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,13 +140,7 @@ def fetch_month(
     month: int,
     bbox: tuple[float, float, float, float],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Fetch all days in one monthly auxiliary file for only the LIX-area grid.
-
-    NCEI's production THREDDS instance uses the legacy NCSS output token
-    ``netcdf3`` for gridded subsets. Each source file already contains exactly
-    one calendar month, so ``time=all`` is both simpler and more robust than an
-    explicit start/end request.
-    """
+    """Fetch all days in one monthly auxiliary file for only the LIX-area grid."""
     west, south, east, north = bbox
     params = {
         "var": "cntp",
@@ -185,19 +180,31 @@ def fetch_month(
     raise RuntimeError(f"Unable to read auxiliary counts for {year}-{month:02d}: {' | '.join(errors)}")
 
 
+def _nearest_axis_indices(source: np.ndarray, targets: np.ndarray, axis_name: str) -> np.ndarray:
+    indices = np.array([int(np.argmin(np.abs(source - value))) for value in targets], dtype=np.int32)
+    offsets = np.abs(source[indices] - targets)
+    max_offset = float(offsets.max()) if offsets.size else 0.0
+    if max_offset > GRID_MATCH_TOLERANCE_DEG:
+        worst = int(np.argmax(offsets))
+        raise RuntimeError(
+            f"Auxiliary {axis_name} grid differs from climatology grid by up to {max_offset:.6f}° "
+            f"at {targets[worst]:.6f}°; tolerance is {GRID_MATCH_TOLERANCE_DEG:.3f}°"
+        )
+    return indices
+
+
 def map_grid_points(
     aux_lats: np.ndarray,
     aux_lons: np.ndarray,
     point_lats: np.ndarray,
     point_lons: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    lat_lookup = {round(float(v), 5): i for i, v in enumerate(aux_lats)}
-    lon_lookup = {round(float(v), 5): i for i, v in enumerate(aux_lons)}
-    try:
-        rows = np.array([lat_lookup[round(float(v), 5)] for v in point_lats], dtype=np.int32)
-        cols = np.array([lon_lookup[round(float(v), 5)] for v in point_lons], dtype=np.int32)
-    except KeyError as exc:
-        raise RuntimeError(f"Auxiliary grid does not align with climatology grid at {exc}") from exc
+    # The NODD and NCEI THREDDS copies describe the same 1/24-degree grid, but
+    # coordinate serialization differs by a few millionths of a degree in some
+    # files. Match each climatology point to the nearest auxiliary coordinate,
+    # while retaining a tight tolerance so a true grid shift cannot pass silently.
+    rows = _nearest_axis_indices(aux_lats, point_lats, "latitude")
+    cols = _nearest_axis_indices(aux_lons, point_lons, "longitude")
     return rows, cols
 
 
