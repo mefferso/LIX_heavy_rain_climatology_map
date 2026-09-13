@@ -85,20 +85,33 @@
 
   async function buildItems() {
     if (state.mode === 'comparison') {
-      const [newer, older] = await Promise.all([loadPeriod(state.comparison.newer_period), loadPeriod(state.comparison.older_period)]);
+      const [newer, older] = await Promise.all([
+        loadPeriod(state.comparison.newer_period),
+        loadPeriod(state.comparison.older_period),
+      ]);
       const oldMap = new Map(older.points.map(p => [`${p.lat.toFixed(5)},${p.lon.toFixed(5)}`, p]));
       return newer.points.map(p => {
         const oldPoint = oldMap.get(`${p.lat.toFixed(5)},${p.lon.toFixed(5)}`);
         if (!oldPoint) return null;
         const newerValue = pointSupport(p);
         const olderValue = pointSupport(oldPoint);
-        return { lat: p.lat, lon: p.lon, value: Math.min(newerValue, olderValue), detail: `${newer.period.label}: ${fmt(newerValue)}<br>${older.period.label}: ${fmt(olderValue)}<br>Ring uses lower-support period` };
+        return {
+          lat: p.lat,
+          lon: p.lon,
+          value: Math.min(newerValue, olderValue),
+          detail: `${newer.period.label}: ${fmt(newerValue)}<br>${older.period.label}: ${fmt(olderValue)}<br>Ring uses lower-support period`,
+        };
       }).filter(Boolean);
     }
     const data = await loadPeriod(state.data.period.id);
     return data.points.map(p => {
       const value = pointSupport(p);
-      return { lat: p.lat, lon: p.lon, value, detail: `${data.period.label}: ${fmt(value)} mean nearby precip observations/day` };
+      return {
+        lat: p.lat,
+        lon: p.lon,
+        value,
+        detail: `${data.period.label}: ${fmt(value)} mean nearby precip observations/day`,
+      };
     });
   }
 
@@ -114,8 +127,17 @@
       const high = quantile(values, 0.95);
       const layer = L.layerGroup();
       for (const item of items) {
-        const ring = L.circleMarker([item.lat, item.lon], { radius: 6.6, fill: false, color: supportColor(item.value, low, high), opacity: 0.92, weight: 2.4 });
-        ring.bindTooltip(`<div class="tooltip-title">Observation support</div><div><strong>${fmt(item.value)} nearby precip obs/day</strong></div><div class="tooltip-small">${item.detail}<br>Grid center: ${item.lat.toFixed(3)}°, ${item.lon.toFixed(3)}°</div>`, { className: 'grid-tooltip', direction: 'top', opacity: 0.98, sticky: true });
+        const ring = L.circleMarker([item.lat, item.lon], {
+          radius: 6.6,
+          fill: false,
+          color: supportColor(item.value, low, high),
+          opacity: 0.92,
+          weight: 2.4,
+        });
+        ring.bindTooltip(
+          `<div class="tooltip-title">Observation support</div><div><strong>${fmt(item.value)} nearby precip obs/day</strong></div><div class="tooltip-small">${item.detail}<br>Grid center: ${item.lat.toFixed(3)}°, ${item.lon.toFixed(3)}°</div>`,
+          { className: 'grid-tooltip', direction: 'top', opacity: 0.98, sticky: true },
+        );
         ring.addTo(layer);
       }
       layer.addTo(map);
@@ -129,8 +151,8 @@
   }
 
   addControl();
-  document.getElementById('periodSelect')?.addEventListener('change', () => setTimeout(refreshDensity, 0));
-  document.getElementById('seasonSelect')?.addEventListener('change', () => setTimeout(refreshDensity, 0));
-  document.getElementById('displayModeButtons')?.addEventListener('click', () => setTimeout(refreshDensity, 0));
-  document.getElementById('mapStyleButtons')?.addEventListener('click', () => setTimeout(refreshDensity, 0));
+  for (const id of ['periodSelect', 'seasonSelect', 'displayModeButtons', 'mapStyleButtons', 'thresholdButtons']) {
+    document.getElementById(id)?.addEventListener('change', () => setTimeout(refreshDensity, 0));
+    document.getElementById(id)?.addEventListener('click', () => setTimeout(refreshDensity, 0));
+  }
 })();

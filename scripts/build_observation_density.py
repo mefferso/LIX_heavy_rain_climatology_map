@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Build nClimGrid-Daily precipitation observation-density support layers.
+"""Build nClimGrid-Daily precipitation observation-support layers.
 
 The companion nClimGrid-Daily-Auxiliary product provides, for every day and
 native grid point, the number of precipitation observations within 30 miles
-that were used as input to nClimGrid-Daily. NCEI publishes these counts as an
-indicator of observation density, one factor affecting uncertainty in the
-interpolated grid-point estimates.
+that support nClimGrid-Daily. These counts are an indicator of observation
+density, which is one factor affecting uncertainty in interpolated estimates.
 
-This script downloads only the LIX-area subset through NCEI's THREDDS NetCDF
-Subset Service, aggregates daily precipitation-observation counts by calendar
-month and year, persists resumable state, and writes compact period JSON files
-for the static GitHub Pages map.
+Only the LIX-area subset is requested from NCEI's THREDDS NetCDF Subset
+Service. Daily counts are aggregated by month/year, resumable state is saved,
+and compact period JSON files are written for the static GitHub Pages map.
 """
 
 from __future__ import annotations
@@ -51,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workers",
         type=int,
-        default=int(os.environ.get("NCLIMGRID_AUX_WORKERS", "12")),
+        default=int(os.environ.get("NCLIMGRID_AUX_WORKERS", "8")),
         help="Concurrent monthly NCEI auxiliary subset requests.",
     )
     return parser.parse_args()
@@ -143,9 +141,10 @@ def fetch_month(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Fetch all days in one monthly auxiliary file for only the LIX-area grid.
 
-    Each ncddsupp file already contains exactly one calendar month. Asking NCSS
-    for an explicit start/end range caused HTTP 400 responses on NCEI's TDS for
-    these files, so request the file's complete time axis with ``time=all``.
+    NCEI's production THREDDS instance uses the legacy NCSS output token
+    ``netcdf3`` for gridded subsets. Each source file already contains exactly
+    one calendar month, so ``time=all`` is both simpler and more robust than an
+    explicit start/end request.
     """
     west, south, east, north = bbox
     params = {
@@ -157,7 +156,7 @@ def fetch_month(
         "horizStride": "1",
         "time": "all",
         "addLatLon": "true",
-        "accept": "netCDF4",
+        "accept": "netcdf3",
     }
     errors: list[str] = []
     for attempt in range(1, 5):
@@ -171,7 +170,7 @@ def fetch_month(
             if not response.ok:
                 detail = response.text[:500].replace("\n", " ").strip()
                 raise RuntimeError(f"HTTP {response.status_code}: {detail or response.reason}")
-            with xr.open_dataset(io.BytesIO(response.content), engine="h5netcdf", decode_times=False) as ds:
+            with xr.open_dataset(io.BytesIO(response.content), engine="scipy", decode_times=False) as ds:
                 if "cntp" not in ds:
                     raise RuntimeError("auxiliary subset does not contain cntp")
                 da = ds["cntp"].transpose("time", "lat", "lon").load()

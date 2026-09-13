@@ -4,5 +4,6 @@ requests>=2.32,<3
 xarray>=2025.1
 h5netcdf>=1.4
 h5py>=3.12
+scipy>=1.14,<2
 fsspec[http]>=2025.1
 shapely>=2.0,<3

@@ -93,7 +93,7 @@
   </main>
 
   <section class="source-strip">
-    <strong>Source:</strong> NOAA/NCEI nClimGrid-Daily v1.0.0 · ~5-km grid · 1951–present. Values are fixed daily 24-hour totals ending in the early morning, not arbitrary rolling 24-hour windows.
+    <strong>Source:</strong> NOAA/NCEI nClimGrid-Daily v1.0.0 · ~5-km grid · 1951–present. Optional observation-support overlay uses the companion nClimGrid-Daily-Auxiliary precipitation observation-count product. Values are fixed daily 24-hour totals ending in the early morning, not arbitrary rolling 24-hour windows.
   </section>
 
   <dialog id="aboutDialog">
@@ -108,7 +108,8 @@
       <p>The analysis counts nClimGrid-Daily grid-cell days meeting each precipitation threshold, then divides by the number of complete years in the selected climatological period. Seasonal views use the same method for the selected calendar months.</p>
       <p><strong>Display mode:</strong> Exceedance thresholds show days meeting or exceeding a selected amount. Rainfall ranges show mutually exclusive daily-total bins derived from those cumulative thresholds (for example, 1–&lt;2 inches equals the ≥1-inch count minus the ≥2-inch count).</p>
       <p><strong>Map style:</strong> Grid points display the native ~5-km grid centers directly. Shaded contours create a smoothed visual surface from those same grid-cell values and draw contour lines on top. The contour view is for seeing broad spatial structure; hover values still come from the original grid cells.</p>
-      <p><strong>Comparison maps show the change in days per year:</strong> newer period minus older period. Positive values mean days in the selected threshold/range became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero.</p>
+      <p><strong>Observation support:</strong> The optional colored-ring overlay comes from NOAA/NCEI's companion nClimGrid-Daily-Auxiliary product. It shows the mean daily number of precipitation input observations within 30 miles of each grid point for the selected period and season. Higher values indicate denser nearby observational support. This helps identify areas where station sparsity may add uncertainty, but it is not a formal confidence score; local rainfall gradients, observation timing, terrain, and interpolation also matter.</p>
+      <p><strong>Comparison maps show the change in days per year:</strong> newer period minus older period. Positive values mean days in the selected threshold/range became more frequent; negative values mean they became less frequent. Percent change is shown in the hover tooltip when the older-period frequency is nonzero. With observation support enabled, comparison rings conservatively use the lower-support value of the two periods.</p>
       <p>The era slices are <strong>2005–2025, 1985–2005, and 1965–1985</strong>. Those labels are inclusive, so adjacent eras intentionally share the boundary year exactly as specified.</p>
       <p><strong>Do not over-interpret tiny pixel differences.</strong> nClimGrid-Daily is an interpolated climate analysis derived from GHCN-Daily observations. NCEI notes uncertainty at individual points and days from station density, local variability, observation time, and interpolation. Broad, coherent spatial patterns are more trustworthy than one isolated pixel.</p>
       <p>The map intentionally uses complete calendar years only, avoiding a partial current year in the climatology.</p>
@@ -122,5 +123,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="app.js"></script>
+  <script src="density.js"></script>
 </body>
 </html>
