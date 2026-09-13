@@ -1,6 +1,6 @@
 {
   "status": "ready",
-  "generated_utc": "2026-09-13T13:03:18.842256+00:00",
+  "generated_utc": "2026-09-13T18:11:37.204034+00:00",
   "source": "NOAA/NCEI nClimGrid-Daily v1.0.0 via NOAA Open Data Dissemination",
   "source_url": "https://registry.opendata.aws/noaa-nclimgrid-daily/",
   "grid_resolution_deg": 0.041666666666666664,
