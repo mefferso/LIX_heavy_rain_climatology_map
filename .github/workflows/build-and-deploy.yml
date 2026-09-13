@@ -1,55 +1,94 @@
-name: Test NOAA NODD ranged NetCDF read
+name: Build climatology and deploy Pages
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'requirements.txt'
+      - '.github/workflows/build-and-deploy.yml'
+  schedule:
+    # Run after the prior year's final nClimGrid products have had time to settle.
+    - cron: '17 9 15 3 *'
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: 'Rebuild the complete 1951-present climatology from scratch'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: lix-heavy-rain-climatology
+  cancel-in-progress: false
 
 jobs:
-  test-read:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 180
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
-      - name: Install test dependencies
-        run: python -m pip install 'numpy<3' 'xarray>=2025.1' 'h5netcdf>=1.4' 'h5py>=3.12' 'fsspec[http]>=2025.1' 'requests>=2.32'
+      - name: Install analysis dependencies
+        run: python -m pip install -r requirements.txt
 
-      - name: Read a tiny LIX subset by HTTP range
+      - name: Build NOAA heavy-rain climatology
+        id: climatology
+        continue-on-error: true
         shell: bash
         run: |
-          python - <<'PY'
-          import fsspec
-          import numpy as np
-          import requests
-          import xarray as xr
+          EXTRA=''
+          if [[ '${{ inputs.rebuild }}' == 'true' ]]; then
+            EXTRA='--rebuild'
+          fi
+          python scripts/build_climatology.py $EXTRA --workers 12
 
-          url = 'https://noaa-nclimgrid-daily-pds.s3.amazonaws.com/access/grids/1951/ncdd-195101-grd-scaled.nc'
-          r = requests.head(url, timeout=60)
-          r.raise_for_status()
-          print('HEAD', r.status_code, 'bytes', r.headers.get('content-length'), 'ranges', r.headers.get('accept-ranges'))
+      - name: Commit generated state and climatology
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/climatology_state.npz docs/data 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo 'No generated changes to commit.'
+          else
+            git commit -m 'Update heavy-rain climatology data'
+            git push origin HEAD:main
+          fi
 
-          of = fsspec.open(url, mode='rb', block_size=8 * 1024 * 1024, cache_type='readahead')
-          with of as fh:
-              with xr.open_dataset(fh, engine='h5netcdf', decode_times=True) as ds:
-                  print(ds)
-                  print('coords', list(ds.coords), 'vars', list(ds.data_vars))
-                  lat_name = next(n for n in ('lat','latitude','y') if n in ds.coords)
-                  lon_name = next(n for n in ('lon','longitude','x') if n in ds.coords)
-                  prcp_name = next(n for n in ('prcp','precip','precipitation') if n in ds.data_vars)
-                  lats = np.asarray(ds[lat_name].values)
-                  lons = np.asarray(ds[lon_name].values)
-                  lat_slice = slice(28.8,31.5) if lats[0] <= lats[-1] else slice(31.5,28.8)
-                  lon_slice = slice(-92.0,-88.2) if lons[0] <= lons[-1] else slice(-88.2,-92.0)
-                  da = ds[prcp_name].sel({lat_name:lat_slice, lon_name:lon_slice}).isel(time=slice(0,2)).load()
-                  arr = np.asarray(da.values)
-                  print('SUBSET shape=', arr.shape, 'finite=', np.isfinite(arr).sum(), 'min=', np.nanmin(arr), 'max=', np.nanmax(arr))
-                  if arr.size == 0 or np.isfinite(arr).sum() == 0:
-                      raise SystemExit('No usable data returned')
-          PY
+      - name: Stop if climatology build failed
+        if: steps.climatology.outcome != 'success'
+        run: |
+          echo 'Climatology build failed. Any safely completed annual state was committed for resume.'
+          exit 1
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
