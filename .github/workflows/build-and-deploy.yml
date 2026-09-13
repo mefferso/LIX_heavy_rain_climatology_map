@@ -1,83 +1,70 @@
-name: Build climatology and deploy Pages
+name: Probe NOAA NODD nClimGrid layout
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '17 9 10 1 *'
   workflow_dispatch:
-    inputs:
-      rebuild:
-        description: 'Force a complete rebuild from 1951'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  build-and-deploy:
-    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install analysis dependencies
-        run: python -m pip install -r requirements.txt
-
-      - name: Build NOAA heavy-rain climatology
+      - name: Probe public NOAA nClimGrid bucket
         shell: bash
         run: |
-          EXTRA=""
-          if [[ "${{ github.event.inputs.rebuild }}" == "true" ]]; then
-            EXTRA="--rebuild"
-          fi
-          python scripts/build_climatology.py $EXTRA --workers 8
+          python - <<'PY'
+          import urllib.parse, urllib.request, xml.etree.ElementTree as ET
 
-      - name: Commit generated climatology
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data data/climatology_state.npz
-          if ! git diff --cached --quiet; then
-            git commit -m "Update NOAA heavy-rain climatology"
-            git push
-          else
-            echo "No generated-data changes to commit."
-          fi
+          BASE = "https://noaa-nclimgrid-daily-pds.s3.amazonaws.com/"
+          NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
+          def listing(prefix="", delimiter="/"):
+              q = {"list-type": "2", "max-keys": "1000"}
+              if prefix:
+                  q["prefix"] = prefix
+              if delimiter:
+                  q["delimiter"] = delimiter
+              url = BASE + "?" + urllib.parse.urlencode(q)
+              print("GET", url)
+              with urllib.request.urlopen(url, timeout=60) as r:
+                  body = r.read()
+                  print("status", r.status, "bytes", len(body))
+              root = ET.fromstring(body)
+              prefixes = [e.text for e in root.findall("s3:CommonPrefixes/s3:Prefix", NS)]
+              keys = [e.text for e in root.findall("s3:Contents/s3:Key", NS)]
+              return prefixes, keys
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
+          prefixes, keys = listing()
+          print("ROOT PREFIXES:", prefixes)
+          print("ROOT KEYS (first 100):", keys[:100])
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          frontier = [(p, 1) for p in prefixes if not p.startswith("EpiNOAA/")]
+          seen = set()
+          target = ("ncdd-195101-grd-scaled.nc", "ncdd-195101-grd-prelim.nc")
+          while frontier:
+              prefix, depth = frontier.pop(0)
+              if prefix in seen or depth > 5:
+                  continue
+              seen.add(prefix)
+              try:
+                  ps, ks = listing(prefix)
+              except Exception as e:
+                  print("LIST ERROR", prefix, repr(e))
+                  continue
+              print("PREFIX", prefix, "SUBDIRS", ps[:30], "KEYS", ks[:30])
+              for k in ks:
+                  if k.endswith(target):
+                      print("FOUND_TARGET", k)
+                      raise SystemExit(0)
+              for p in ps:
+                  low = p.lower()
+                  if depth <= 2 or "1951" in low or "grid" in low or "v1" in low or "data" in low:
+                      frontier.append((p, depth + 1))
+
+          print("TARGET NOT FOUND")
+          raise SystemExit(2)
+          PY
