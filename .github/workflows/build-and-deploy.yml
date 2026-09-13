@@ -19,7 +19,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install test dependencies
-        run: python -m pip install 'numpy<3' 'xarray>=2025.1' 'h5netcdf>=1.4' 'fsspec>=2025.1' 'requests>=2.32'
+        run: python -m pip install 'numpy<3' 'xarray>=2025.1' 'h5netcdf>=1.4' 'fsspec[http]>=2025.1' 'requests>=2.32'
 
       - name: Read a tiny LIX subset by HTTP range
         shell: bash
