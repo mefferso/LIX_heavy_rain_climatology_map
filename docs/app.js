@@ -2,9 +2,11 @@
 
 const state = {
   manifest: null,
+  mode: 'period',
+  selectionId: null,
   data: null,
+  comparison: null,
   thresholdIndex: 1,
-  periodId: null,
   season: 'annual',
   boundary: null,
   pointLayer: null,
@@ -48,13 +50,15 @@ const els = {
   thresholdButtons: document.getElementById('thresholdButtons'),
   periodSelect: document.getElementById('periodSelect'),
   seasonSelect: document.getElementById('seasonSelect'),
+  medianLabel: document.getElementById('medianLabel'),
   medianMetric: document.getElementById('medianMetric'),
   medianDetail: document.getElementById('medianDetail'),
+  maxLabel: document.getElementById('maxLabel'),
   maxMetric: document.getElementById('maxMetric'),
+  p90Label: document.getElementById('p90Label'),
   p90Metric: document.getElementById('p90Metric'),
   pointMetric: document.getElementById('pointMetric'),
   interpretationText: document.getElementById('interpretationText'),
-  hotspotList: document.getElementById('hotspotList'),
   status: document.getElementById('status'),
   legend: document.getElementById('legend'),
   aboutBtn: document.getElementById('aboutBtn'),
@@ -67,8 +71,8 @@ els.seasonSelect.addEventListener('change', () => {
   render();
 });
 els.periodSelect.addEventListener('change', async () => {
-  state.periodId = els.periodSelect.value;
-  await loadPeriod(state.periodId);
+  state.selectionId = els.periodSelect.value;
+  await loadSelection(state.selectionId);
   render();
 });
 
@@ -93,28 +97,32 @@ function formatRate(v) {
 
 function formatShortRate(v) {
   if (!Number.isFinite(v)) return '—';
-  if (v >= 1) return v.toFixed(2);
-  if (v >= 0.1) return v.toFixed(3);
-  if (v > 0) return v.toFixed(4);
+  const a = Math.abs(v);
+  if (a >= 1) return v.toFixed(2);
+  if (a >= 0.1) return v.toFixed(3);
+  if (a > 0) return v.toFixed(4);
   return '0';
+}
+
+function formatDelta(v, long = true) {
+  if (!Number.isFinite(v)) return '—';
+  const sign = v > 0 ? '+' : '';
+  return long ? `${sign}${formatShortRate(v)} days/yr` : `${sign}${formatShortRate(v)}`;
 }
 
 function recurrenceText(rate) {
   if (!rate) return 'No exceedance in this period';
   const years = 1 / rate;
-  if (years < 1) {
-    const days = 365.2425 / (rate * 365.2425);
-    return rate >= 1 ? `about ${rate.toFixed(1)} exceedance days each year` : `about one exceedance day every ${days.toFixed(1)} years`;
-  }
+  if (rate >= 1) return `about ${rate.toFixed(1)} exceedance days each year`;
   if (years < 10) return `about one exceedance day every ${years.toFixed(1)} years`;
   return `about one exceedance day every ${Math.round(years)} years`;
 }
 
-function rateForPoint(point) {
+function rateForPoint(point, data) {
   const months = seasonMonths[state.season];
   const counts = point.c[state.thresholdIndex];
   const total = months.reduce((sum, m) => sum + (counts[m] || 0), 0);
-  return total / state.data.period.years;
+  return total / data.period.years;
 }
 
 function countForPoint(point) {
@@ -123,11 +131,21 @@ function countForPoint(point) {
   return months.reduce((sum, m) => sum + (counts[m] || 0), 0);
 }
 
-function colorFor(value, scaleMax) {
+function sequentialColor(value, scaleMax) {
   const colors = ['#18334a', '#1f6475', '#2a8c82', '#67ad6c', '#c1c85c', '#f2b24f', '#ec7845', '#d84455', '#9e2f68'];
   if (value <= 0 || scaleMax <= 0) return '#d4dde4';
   const t = Math.min(1, Math.sqrt(value / scaleMax));
   return colors[Math.min(colors.length - 1, Math.floor(t * colors.length))];
+}
+
+function comparisonColor(value, scaleMax) {
+  if (!Number.isFinite(value) || scaleMax <= 0) return '#e5e7eb';
+  const t = Math.min(1, Math.abs(value) / scaleMax);
+  if (Math.abs(value) < scaleMax * 0.04) return '#e5e7eb';
+  const negative = ['#dbeafe', '#93c5fd', '#60a5fa', '#2563eb', '#1e3a8a'];
+  const positive = ['#fff7d6', '#fcd34d', '#fb923c', '#ef4444', '#9f1239'];
+  const palette = value < 0 ? negative : positive;
+  return palette[Math.min(palette.length - 1, Math.floor(t * palette.length))];
 }
 
 function dateText(yyyymmdd) {
@@ -137,7 +155,7 @@ function dateText(yyyymmdd) {
   return `${s.slice(4, 6)}/${s.slice(6, 8)}/${s.slice(0, 4)}`;
 }
 
-function tooltipHtml(point, rate) {
+function periodTooltipHtml(point, rate) {
   const threshold = state.manifest.thresholds_in[state.thresholdIndex];
   const count = countForPoint(point);
   const maxIn = point.mx ? point.mx / 25.4 : null;
@@ -152,104 +170,117 @@ function tooltipHtml(point, rate) {
     </div>`;
 }
 
-function haversineMiles(a, b) {
-  const r = 3958.7613;
-  const toRad = Math.PI / 180;
-  const dLat = (b.lat - a.lat) * toRad;
-  const dLon = (b.lon - a.lon) * toRad;
-  const lat1 = a.lat * toRad;
-  const lat2 = b.lat * toRad;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * r * Math.asin(Math.sqrt(h));
+function comparisonTooltipHtml(item) {
+  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  const c = state.comparison;
+  let pct = '—';
+  if (item.olderRate > 0) pct = `${item.delta >= 0 ? '+' : ''}${((item.delta / item.olderRate) * 100).toFixed(1)}%`;
+  return `
+    <div class="tooltip-title">≥${threshold}" in 24 hr · change</div>
+    <div><strong>${formatDelta(item.delta)}</strong></div>
+    <div class="tooltip-small">
+      ${c.newer.label}: ${formatRate(item.newerRate)}<br>
+      ${c.older.label}: ${formatRate(item.olderRate)}<br>
+      Relative change: ${pct}<br>
+      Grid center: ${item.point.lat.toFixed(3)}°, ${item.point.lon.toFixed(3)}°
+    </div>`;
 }
 
-function findHotspots(pointsWithRates, limit = 8, separationMiles = 15) {
-  const sorted = [...pointsWithRates].filter(x => x.rate > 0).sort((a, b) => b.rate - a.rate);
-  const chosen = [];
-  for (const candidate of sorted) {
-    if (chosen.every(existing => haversineMiles(existing.point, candidate.point) >= separationMiles)) {
-      chosen.push(candidate);
-      if (chosen.length >= limit) break;
-    }
+function renderItems() {
+  if (state.mode === 'period') {
+    return state.data.points.map(point => ({ point, rate: rateForPoint(point, state.data) }));
   }
-  return chosen;
-}
-
-function updateHotspots(pointsWithRates) {
-  const hotspots = findHotspots(pointsWithRates);
-  els.hotspotList.innerHTML = '';
-  if (!hotspots.length) {
-    els.hotspotList.innerHTML = '<p class="muted">No exceedances found for this threshold and period.</p>';
-    return;
-  }
-  hotspots.forEach((item, i) => {
-    const button = document.createElement('button');
-    button.className = 'hotspot-item';
-    button.type = 'button';
-    button.innerHTML = `
-      <span class="hotspot-rank">${i + 1}</span>
-      <span>
-        <strong>${item.point.lat.toFixed(3)}°, ${item.point.lon.toFixed(3)}°</strong>
-        <div class="hotspot-coord">${recurrenceText(item.rate)}</div>
-      </span>
-      <span class="hotspot-value">${formatShortRate(item.rate)}/yr</span>`;
-    button.addEventListener('click', () => {
-      map.flyTo([item.point.lat, item.point.lon], 10, { duration: 0.7 });
-    });
-    els.hotspotList.appendChild(button);
+  return state.comparison.newerData.points.map((point, i) => {
+    const olderPoint = state.comparison.olderData.points[i];
+    const newerRate = rateForPoint(point, state.comparison.newerData);
+    const olderRate = rateForPoint(olderPoint, state.comparison.olderData);
+    return { point, newerRate, olderRate, delta: newerRate - olderRate };
   });
 }
 
-function updateStats(rates) {
-  const sorted = rates.filter(Number.isFinite).sort((a, b) => a - b);
-  const median = quantile(sorted, 0.5);
-  const p90 = quantile(sorted, 0.9);
-  const max = sorted.length ? sorted[sorted.length - 1] : 0;
-  els.medianMetric.textContent = formatRate(median);
-  els.medianDetail.textContent = recurrenceText(median);
-  els.maxMetric.textContent = formatShortRate(max) + '/yr';
-  els.p90Metric.textContent = formatShortRate(p90) + '/yr';
-  els.pointMetric.textContent = state.data.points.length.toLocaleString();
+function updateStats(items) {
+  if (state.mode === 'period') {
+    const rates = items.map(x => x.rate).filter(Number.isFinite).sort((a, b) => a - b);
+    const median = quantile(rates, 0.5);
+    const p90 = quantile(rates, 0.9);
+    const max = rates.length ? rates[rates.length - 1] : 0;
+    els.medianLabel.textContent = 'CWA median';
+    els.medianMetric.textContent = formatRate(median);
+    els.medianDetail.textContent = recurrenceText(median);
+    els.maxLabel.textContent = 'Wettest grid';
+    els.maxMetric.textContent = formatShortRate(max) + '/yr';
+    els.p90Label.textContent = '90th percentile';
+    els.p90Metric.textContent = formatShortRate(p90) + '/yr';
+    els.pointMetric.textContent = state.data.points.length.toLocaleString();
 
-  const threshold = state.manifest.thresholds_in[state.thresholdIndex];
-  const season = seasonNames[state.season];
-  els.interpretationText.textContent = `Each pixel shows the average number of ${season} days per year with at least ${threshold}" of precipitation in the fixed daily 24-hour accumulation. The hot-spot list suppresses maxima within 15 miles of a higher-ranked point.`;
+    const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+    const season = seasonNames[state.season];
+    els.interpretationText.textContent = `Each pixel shows the average number of ${season} days per year with at least ${threshold}" of precipitation during ${state.data.period.label}.`;
+  } else {
+    const deltas = items.map(x => x.delta).filter(Number.isFinite).sort((a, b) => a - b);
+    const median = quantile(deltas, 0.5);
+    const p90 = quantile(deltas, 0.9);
+    const max = deltas.length ? deltas[deltas.length - 1] : 0;
+    els.medianLabel.textContent = 'CWA median change';
+    els.medianMetric.textContent = formatDelta(median);
+    els.medianDetail.textContent = `${state.comparison.newer.label} minus ${state.comparison.older.label}`;
+    els.maxLabel.textContent = 'Largest increase';
+    els.maxMetric.textContent = formatDelta(max, false) + '/yr';
+    els.p90Label.textContent = '90th percentile change';
+    els.p90Metric.textContent = formatDelta(p90, false) + '/yr';
+    els.pointMetric.textContent = items.length.toLocaleString();
+
+    const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+    const season = seasonNames[state.season];
+    els.interpretationText.textContent = `Each pixel shows the change in average ${season} exceedance days per year for ≥${threshold}": ${state.comparison.newer.label} minus ${state.comparison.older.label}. Warm colors mean more frequent heavy-rain days; blue means less frequent.`;
+  }
 }
 
-function updateLegend(rates) {
-  const positive = rates.filter(v => v > 0).sort((a, b) => a - b);
-  const scaleMax = positive.length ? Math.max(quantile(positive, 0.95), positive[positive.length - 1] * 0.35) : 1;
+function updateLegend(items) {
   const threshold = state.manifest.thresholds_in[state.thresholdIndex];
+  if (state.mode === 'period') {
+    const rates = items.map(x => x.rate);
+    const positive = rates.filter(v => v > 0).sort((a, b) => a - b);
+    const scaleMax = positive.length ? Math.max(quantile(positive, 0.95), positive[positive.length - 1] * 0.35) : 1;
+    els.legend.innerHTML = `
+      <div class="legend-title">≥${threshold}" · exceedance days/yr</div>
+      <div class="legend-ramp" style="background:linear-gradient(90deg,#18334a,#1f6475,#2a8c82,#67ad6c,#c1c85c,#f2b24f,#ec7845,#d84455,#9e2f68)"></div>
+      <div class="legend-labels"><span>0</span><span>${formatShortRate(scaleMax / 2)}</span><span>≥${formatShortRate(scaleMax)}</span></div>
+      <div class="tooltip-small" style="margin-top:6px">Scale capped near the upper tail so local structure remains visible. Hover for exact values.</div>`;
+    return scaleMax;
+  }
+
+  const abs = items.map(x => Math.abs(x.delta)).filter(v => v > 0).sort((a, b) => a - b);
+  const scaleMax = abs.length ? Math.max(quantile(abs, 0.95), abs[abs.length - 1] * 0.35) : 1;
   els.legend.innerHTML = `
-    <div class="legend-title">≥${threshold}" · exceedance days/yr</div>
-    <div class="legend-ramp" style="background:linear-gradient(90deg,#18334a,#1f6475,#2a8c82,#67ad6c,#c1c85c,#f2b24f,#ec7845,#d84455,#9e2f68)"></div>
-    <div class="legend-labels"><span>0</span><span>${formatShortRate(scaleMax / 2)}</span><span>≥${formatShortRate(scaleMax)}</span></div>
-    <div class="tooltip-small" style="margin-top:6px">Scale capped near the upper tail so local structure remains visible. Hover for exact values.</div>`;
+    <div class="legend-title">≥${threshold}" · change in days/yr</div>
+    <div class="legend-ramp" style="background:linear-gradient(90deg,#1e3a8a,#2563eb,#93c5fd,#e5e7eb,#fcd34d,#ef4444,#9f1239)"></div>
+    <div class="legend-labels"><span>≤−${formatShortRate(scaleMax)}</span><span>0</span><span>≥+${formatShortRate(scaleMax)}</span></div>
+    <div class="tooltip-small" style="margin-top:6px">Newer minus older period. Symmetric scale centered on zero; hover for exact rates and percent change.</div>`;
   return scaleMax;
 }
 
 function render() {
-  if (!state.data || !state.manifest) return;
+  if (!state.manifest || (!state.data && !state.comparison)) return;
   if (state.pointLayer) state.pointLayer.remove();
 
-  const pointsWithRates = state.data.points.map(point => ({ point, rate: rateForPoint(point) }));
-  const rates = pointsWithRates.map(x => x.rate);
-  const scaleMax = updateLegend(rates);
-  updateStats(rates);
-  updateHotspots(pointsWithRates);
+  const items = renderItems();
+  const scaleMax = updateLegend(items);
+  updateStats(items);
 
   const layer = L.layerGroup();
-  for (const { point, rate } of pointsWithRates) {
-    const marker = L.circleMarker([point.lat, point.lon], {
+  for (const item of items) {
+    const value = state.mode === 'period' ? item.rate : item.delta;
+    const marker = L.circleMarker([item.point.lat, item.point.lon], {
       renderer: canvasRenderer,
       radius: 4.1,
       stroke: false,
       fill: true,
-      fillColor: colorFor(rate, scaleMax),
-      fillOpacity: rate > 0 ? 0.88 : 0.28,
+      fillColor: state.mode === 'period' ? sequentialColor(value, scaleMax) : comparisonColor(value, scaleMax),
+      fillOpacity: state.mode === 'period' ? (value > 0 ? 0.88 : 0.28) : 0.88,
       bubblingMouseEvents: true,
     });
-    marker.bindTooltip(() => tooltipHtml(point, rate), {
+    marker.bindTooltip(() => state.mode === 'period' ? periodTooltipHtml(item.point, item.rate) : comparisonTooltipHtml(item), {
       className: 'grid-tooltip',
       direction: 'top',
       opacity: 0.98,
@@ -266,18 +297,44 @@ function render() {
   });
 }
 
-async function loadPeriod(periodId) {
+async function loadPeriodData(periodId) {
+  if (state.cache.has(periodId)) return state.cache.get(periodId);
   const meta = state.manifest.periods.find(p => p.id === periodId);
   if (!meta) throw new Error(`Unknown period: ${periodId}`);
+  const response = await fetch(meta.file, { cache: 'no-cache' });
+  if (!response.ok) throw new Error(`Could not load ${meta.file}`);
+  const data = await response.json();
+  state.cache.set(periodId, data);
+  return data;
+}
+
+async function loadSelection(selectionId) {
   els.status.classList.remove('ready');
-  els.status.textContent = `Loading ${meta.label}…`;
-  if (!state.cache.has(periodId)) {
-    const response = await fetch(meta.file, { cache: 'no-cache' });
-    if (!response.ok) throw new Error(`Could not load ${meta.file}`);
-    state.cache.set(periodId, await response.json());
+  const comparison = state.manifest.comparisons.find(c => c.id === selectionId);
+  if (comparison) {
+    state.mode = 'comparison';
+    els.status.textContent = `Loading ${comparison.label}…`;
+    const [newerData, olderData] = await Promise.all([
+      loadPeriodData(comparison.newer_period),
+      loadPeriodData(comparison.older_period),
+    ]);
+    state.data = null;
+    state.comparison = {
+      ...comparison,
+      newerData,
+      olderData,
+      newer: newerData.period,
+      older: olderData.period,
+    };
+  } else {
+    state.mode = 'period';
+    const meta = state.manifest.periods.find(p => p.id === selectionId);
+    if (!meta) throw new Error(`Unknown selection: ${selectionId}`);
+    els.status.textContent = `Loading ${meta.label}…`;
+    state.data = await loadPeriodData(selectionId);
+    state.comparison = null;
   }
-  state.data = state.cache.get(periodId);
-  els.status.textContent = `Loaded ${meta.label}`;
+  els.status.textContent = state.mode === 'comparison' ? `Loaded ${state.comparison.label}` : `Loaded ${state.data.period.label}`;
   els.status.classList.add('ready');
 }
 
@@ -297,12 +354,27 @@ function buildControls() {
   });
 
   els.periodSelect.innerHTML = '';
+  const periodsGroup = document.createElement('optgroup');
+  periodsGroup.label = 'Climatology periods';
   state.manifest.periods.forEach(period => {
     const option = document.createElement('option');
     option.value = period.id;
     option.textContent = period.label;
-    els.periodSelect.appendChild(option);
+    periodsGroup.appendChild(option);
   });
+  els.periodSelect.appendChild(periodsGroup);
+
+  if (state.manifest.comparisons?.length) {
+    const comparisonGroup = document.createElement('optgroup');
+    comparisonGroup.label = 'Change / comparisons';
+    state.manifest.comparisons.forEach(comparison => {
+      const option = document.createElement('option');
+      option.value = comparison.id;
+      option.textContent = comparison.label;
+      comparisonGroup.appendChild(option);
+    });
+    els.periodSelect.appendChild(comparisonGroup);
+  }
 }
 
 async function loadBoundary() {
@@ -312,13 +384,7 @@ async function loadBoundary() {
     state.boundary = await response.json();
     if (state.boundaryLayer) state.boundaryLayer.remove();
     state.boundaryLayer = L.geoJSON(state.boundary, {
-      style: {
-        color: '#ffffff',
-        weight: 2.2,
-        opacity: 0.95,
-        fill: false,
-        dashArray: '7 5',
-      },
+      style: { color: '#ffffff', weight: 2.2, opacity: 0.95, fill: false, dashArray: '7 5' },
       interactive: false,
     }).addTo(map);
     map.fitBounds(state.boundaryLayer.getBounds().pad(0.04));
@@ -335,15 +401,16 @@ async function init() {
 
     if (state.manifest.status !== 'ready') {
       els.status.textContent = 'Climatology build has not finished yet.';
-      els.medianDetail.textContent = 'The first NOAA data build runs automatically in GitHub Actions.';
+      els.medianDetail.textContent = 'The NOAA data build runs automatically in GitHub Actions.';
       return;
     }
 
     const twoInchIndex = state.manifest.thresholds_in.indexOf(2);
     state.thresholdIndex = twoInchIndex >= 0 ? twoInchIndex : 0;
-    state.periodId = state.manifest.periods[0].id;
+    state.selectionId = state.manifest.periods.find(p => p.id === 'era_2005_2025')?.id || state.manifest.periods[0].id;
     buildControls();
-    await Promise.all([loadPeriod(state.periodId), loadBoundary()]);
+    els.periodSelect.value = state.selectionId;
+    await Promise.all([loadSelection(state.selectionId), loadBoundary()]);
     render();
   } catch (error) {
     console.error(error);
